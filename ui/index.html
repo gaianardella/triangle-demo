@@ -269,7 +269,8 @@
     button:hover { background: rgba(79, 216, 122, 0.22); }
     button.active { background: var(--accent); color: var(--bg); }
 
-    input[type="text"] {
+    input[type="text"],
+    select {
       width: 100%;
       margin-top: 8px;
       padding: 6px 8px;
@@ -280,6 +281,10 @@
       color: var(--text);
       border-radius: 3px;
     }
+
+    select { cursor: pointer; }
+
+    select:disabled { opacity: 0.45; }
   </style>
 </head>
 <body>
@@ -298,11 +303,16 @@
     <aside class="panel" style="grid-row: 2">
       <h2>Legenda</h2>
       <div class="legend" id="legend"></div>
+      <h2 style="margin-top: 14px">Scenario</h2>
+      <select id="scenarioSelect" disabled>
+        <option value="">— load localizations —</option>
+      </select>
       <h2 style="margin-top: 14px">WebSocket</h2>
       <input type="text" id="wsUrl" value="ws://localhost:8765" placeholder="ws://host:port" />
       <div class="btn-row">
         <button type="button" id="btnConnect">CONNECT</button>
-        <button type="button" id="btnDemo" class="active">DEMO</button>
+        <button type="button" id="btnDemo">DEMO</button>
+        <button type="button" id="btnLocalize" class="active">LOCALIZE</button>
       </div>
     </aside>
 
@@ -364,23 +374,57 @@
       unknown: `<svg width="26" height="26" viewBox="0 0 26 26" fill="none">
         <path d="M13 2 L24 22 H2 Z" stroke="#e85c4a" stroke-width="1.5" fill="rgba(232,92,74,0.2)"/>
         <text x="13" y="17" text-anchor="middle" fill="#e85c4a" font-size="10" font-family="monospace">?</text>
+      </svg>`,
+      gunshot: `<svg width="30" height="30" viewBox="0 0 30 30" fill="none">
+        <circle cx="15" cy="15" r="12" stroke="#e85c4a" stroke-width="1.2" fill="rgba(232,92,74,0.25)"/>
+        <path d="M15 6 L17 13 L15 11 L13 13 Z" fill="#ff8a70"/>
+        <path d="M6 15 L13 13 L11 15 L13 17 Z" fill="#e85c4a" opacity="0.9"/>
+        <path d="M24 15 L17 17 L19 15 L17 13 Z" fill="#e85c4a" opacity="0.9"/>
+        <path d="M15 24 L13 17 L15 19 L17 17 Z" fill="#e85c4a" opacity="0.9"/>
+        <circle cx="15" cy="15" r="3" fill="#fff5f0"/>
+      </svg>`,
+      missile_launch: `<svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+        <path d="M16 4 L20 14 L16 26 L12 14 Z" fill="#e85c4a"/>
+        <path d="M10 18 L16 14 L22 18 L16 22 Z" fill="#c44a3a" opacity="0.85"/>
+        <ellipse cx="16" cy="28" rx="5" ry="2" fill="rgba(232,92,74,0.35)"/>
+      </svg>`,
+      drone_hostile: `<svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+        <circle cx="14" cy="14" r="11" stroke="#e8a838" stroke-width="1.2" fill="rgba(232,168,56,0.2)"/>
+        <path d="M14 5 L16 11 L14 9 L12 11 Z" fill="#e8a838"/>
+        <circle cx="14" cy="14" r="3" fill="#e8a838"/>
       </svg>`
     };
 
+    const LABEL_TO_ICON = {
+      gunshot: "gunshot",
+      missile_launch: "missile_launch",
+      tank: "tank",
+      drone: "drone_hostile"
+    };
+
+    const LOCALIZATIONS_URLS = [
+      "/detection/output/localizations.json",
+      "../detection/output/localizations.json"
+    ];
+
     const LEGEND_ITEMS = [
-      { key: "drone", label: "Friendly UAV" },
-      { key: "tank", label: "Hostile armor" },
-      { key: "soldier", label: "Hostile infantry" },
-      { key: "weapon", label: "Weapon cache" },
-      { key: "vehicle", label: "Hostile vehicle" }
+      { key: "drone", label: "Sensor UAV" },
+      { key: "gunshot", label: "Gunfire (localized)" },
+      { key: "missile_launch", label: "Missile launch" },
+      { key: "tank", label: "Armor / tank" },
+      { key: "drone_hostile", label: "Hostile UAV" }
     ];
 
     // ─── State ───────────────────────────────────────────────────────────
     const state = {
       drones: [],
       targets: [],
+      cloud: [],
       sonars: [],
-      demoMode: true,
+      mode: "localize",
+      localizations: [],
+      scenarioIndex: 0,
+      geoBounds: null,
       ws: null,
       pingCount: 0,
       lastFrame: performance.now(),
@@ -509,6 +553,53 @@
       state.pingCount++;
     }
 
+    function computeGeoBounds(entry) {
+      const lats = [];
+      const lons = [];
+      for (const d of entry.drones_used) {
+        lats.push(d.lat);
+        lons.push(d.lon);
+      }
+      lats.push(entry.source.lat);
+      lons.push(entry.source.lon);
+      for (const p of entry.cloud_latlon || []) {
+        lats.push(p.lat);
+        lons.push(p.lon);
+      }
+      const pad = 0.00012;
+      return {
+        minLat: Math.min(...lats) - pad,
+        maxLat: Math.max(...lats) + pad,
+        minLon: Math.min(...lons) - pad,
+        maxLon: Math.max(...lons) + pad
+      };
+    }
+
+    function latLonToNorm(lat, lon, b) {
+      const x = (lon - b.minLon) / (b.maxLon - b.minLon);
+      const y = 1 - (lat - b.minLat) / (b.maxLat - b.minLat);
+      return { x, y };
+    }
+
+    function drawConfidenceCloud() {
+      if (!state.cloud || state.cloud.length < 3) return;
+      const { w, h } = terrain;
+      ctx.beginPath();
+      for (let i = 0; i < state.cloud.length; i++) {
+        const p = state.cloud[i];
+        const px = p.x * w;
+        const py = p.y * h;
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.closePath();
+      ctx.fillStyle = "rgba(232, 92, 74, 0.18)";
+      ctx.strokeStyle = "rgba(232, 92, 74, 0.45)";
+      ctx.lineWidth = 1.5;
+      ctx.fill();
+      ctx.stroke();
+    }
+
     function drawPulses() {
       const { w, h } = terrain;
       const maxR = Math.min(w, h) * 0.35;
@@ -573,7 +664,8 @@
       for (const t of state.targets) {
         const id = `target-${t.id}`;
         active.add(id);
-        const type = ["tank", "soldier", "weapon", "vehicle"].includes(t.type) ? t.type : "unknown";
+        const known = ["tank", "soldier", "weapon", "vehicle", "gunshot", "missile_launch", "drone_hostile"];
+        const type = known.includes(t.type) ? t.type : "unknown";
         upsertEntity(id, type, t.x, t.y, t.label || type.toUpperCase(), "hostile");
       }
       removeStaleEntities(active);
@@ -594,6 +686,7 @@
     function applyPayload(data) {
       if (data.drones) state.drones = data.drones;
       if (data.targets) state.targets = data.targets;
+      if (data.cloud) state.cloud = data.cloud;
       if (data.sonar) {
         for (const s of data.sonar) {
           emitPulse(s.x, s.y, s.color || "rgba(79, 216, 122, 0.5)");
@@ -602,14 +695,115 @@
       if (data.log) addLog(data.log.message, data.log.level || "ok");
     }
 
+    function applyLocalizationEntry(entry) {
+      const b = computeGeoBounds(entry);
+      state.geoBounds = b;
+
+      state.drones = entry.drones_used.map((d) => {
+        const p = latLonToNorm(d.lat, d.lon, b);
+        return { id: d.drone_id, x: p.x, y: p.y, heading: 0 };
+      });
+
+      const src = latLonToNorm(entry.source.lat, entry.source.lon, b);
+      const iconType = LABEL_TO_ICON[entry.label] || "unknown";
+      state.targets = [{
+        id: `src-${entry.scenario}`,
+        type: iconType,
+        x: src.x,
+        y: src.y,
+        label: entry.label_human || entry.label
+      }];
+
+      state.cloud = (entry.cloud_latlon || []).map((pt) => latLonToNorm(pt.lat, pt.lon, b));
+
+      const name = entry.scenario.replace(/^scenario_/, "").replace(/\.wav$/, "");
+      addLog(
+        `${entry.label_human || entry.label} · CEP50 ${entry.cep50_m}m · ${name}`,
+        "hostile"
+      );
+
+      document.getElementById("coords").textContent =
+        `SRC ${entry.source.lat.toFixed(5)}°N ${entry.source.lon.toFixed(5)}°E · CEP50 ${entry.cep50_m}m · GDOP ${entry.gdop}`;
+    }
+
+    function showScenario(index) {
+      if (!state.localizations.length) return;
+      state.scenarioIndex = index;
+      applyLocalizationEntry(state.localizations[index]);
+      for (const d of state.drones) {
+        emitPulse(d.x, d.y, "rgba(79, 216, 122, 0.35)");
+      }
+      emitPulse(state.targets[0].x, state.targets[0].y, "rgba(232, 92, 74, 0.45)");
+    }
+
+    function populateScenarioSelect() {
+      const sel = document.getElementById("scenarioSelect");
+      sel.innerHTML = "";
+      state.localizations.forEach((entry, i) => {
+        const opt = document.createElement("option");
+        const short = entry.scenario.replace(/^scenario_/, "").replace(/\.wav$/, "");
+        opt.value = String(i);
+        opt.textContent = `${short} · ${entry.label_human || entry.label}`;
+        sel.appendChild(opt);
+      });
+      sel.disabled = false;
+      sel.value = String(state.scenarioIndex);
+    }
+
+    async function loadLocalizations() {
+      let data = null;
+      let usedUrl = "";
+      for (const url of LOCALIZATIONS_URLS) {
+        try {
+          const res = await fetch(url);
+          if (!res.ok) continue;
+          data = await res.json();
+          usedUrl = url;
+          break;
+        } catch (_) { /* try next */ }
+      }
+      if (!data || !Array.isArray(data) || !data.length) {
+        addLog(
+          "Could not load localizations.json — run: python -m http.server 8080 (repo root), open /ui/index.html",
+          "warn"
+        );
+        return false;
+      }
+      state.localizations = data;
+      state.scenarioIndex = 0;
+      populateScenarioSelect();
+      showScenario(0);
+      addLog(`Loaded ${data.length} scenarios from ${usedUrl}`, "ok");
+      setWsStatus(false, "LOCALIZE");
+      return true;
+    }
+
+    function setMode(mode) {
+      state.mode = mode;
+      document.getElementById("btnDemo").classList.toggle("active", mode === "demo");
+      document.getElementById("btnLocalize").classList.toggle("active", mode === "localize");
+      if (mode !== "ws" && state.ws) {
+        state.ws.close();
+        state.ws = null;
+      }
+      if (mode === "demo") {
+        setWsStatus(false, "DEMO");
+        state.cloud = [];
+      } else if (mode === "localize") {
+        if (state.localizations.length) showScenario(state.scenarioIndex);
+        else loadLocalizations();
+      }
+    }
+
     function connectWs() {
       const url = document.getElementById("wsUrl").value.trim();
       if (state.ws) {
         state.ws.close();
         state.ws = null;
       }
-      state.demoMode = false;
+      setMode("ws");
       document.getElementById("btnDemo").classList.remove("active");
+      document.getElementById("btnLocalize").classList.remove("active");
 
       try {
         state.ws = new WebSocket(url);
@@ -721,25 +915,27 @@
       state.fps = Math.round(1000 / dt);
       document.getElementById("statFps").textContent = state.fps;
 
-      if (state.demoMode) runDemo(dt);
+      if (state.mode === "demo") runDemo(dt);
 
       drawTerrain();
+      if (state.mode === "localize") drawConfidenceCloud();
       drawPulses();
 
-      // Auto sonar from drones if none in payload
-      if (state.demoMode && state.drones[0] && Math.random() < 0.06) {
+      if (state.mode === "demo" && state.drones[0] && Math.random() < 0.06) {
         const d = state.drones[0];
         emitPulse(d.x, d.y);
       }
 
       renderEntities();
 
-      const d = state.drones[0];
-      if (d) {
-        const lat = (62.41 + (d.y - 0.5) * 0.02).toFixed(3);
-        const lon = (25.75 + (d.x - 0.5) * 0.02).toFixed(3);
-        document.getElementById("coords").textContent =
-          `LAT ${lat}°N · LON ${lon}°E · ALT 42m · HDG ${Math.floor(d.heading || 0)}°`;
+      if (state.mode === "demo") {
+        const d = state.drones[0];
+        if (d) {
+          const lat = (62.41 + (d.y - 0.5) * 0.02).toFixed(3);
+          const lon = (25.75 + (d.x - 0.5) * 0.02).toFixed(3);
+          document.getElementById("coords").textContent =
+            `LAT ${lat}°N · LON ${lon}°E · ALT 42m · HDG ${Math.floor(d.heading || 0)}°`;
+        }
       }
 
       requestAnimationFrame(frame);
@@ -747,8 +943,8 @@
 
     // ─── Init ──────────────────────────────────────────────────────────────
     buildLegend();
-    addLog("Tactical map ready · DEMO mode", "ok");
-    addLog("Finnish forest sector loaded", "ok");
+    addLog("Tactical map ready", "ok");
+    addLog("LOCALIZE mode: loads detection/output/localizations.json", "ok");
 
     window.addEventListener("resize", resize);
     resize();
@@ -756,15 +952,19 @@
 
     document.getElementById("btnConnect").addEventListener("click", connectWs);
     document.getElementById("btnDemo").addEventListener("click", () => {
-      state.demoMode = true;
-      if (state.ws) {
-        state.ws.close();
-        state.ws = null;
-      }
-      setWsStatus(false, "DEMO");
-      document.getElementById("btnDemo").classList.add("active");
+      setMode("demo");
       addLog("Demo mode active", "ok");
     });
+    document.getElementById("btnLocalize").addEventListener("click", () => {
+      setMode("localize");
+      addLog("Localize mode active", "ok");
+    });
+    document.getElementById("scenarioSelect").addEventListener("change", (ev) => {
+      const idx = parseInt(ev.target.value, 10);
+      if (!Number.isNaN(idx)) showScenario(idx);
+    });
+
+    loadLocalizations();
 
     // ?ws=ws://192.168.1.10:8765 auto-connect
     const params = new URLSearchParams(location.search);

@@ -693,6 +693,83 @@ def _toa_offset_ns(sensor: dict[str, float], source: dict[str, float]) -> int:
     return int(dist_m / SPEED_OF_SOUND_M_S * 1e9)
 
 
+def _offset_latlon(lat: float, lon: float, east_m: float, north_m: float) -> tuple[float, float]:
+    """Local equirectangular shift (+east, +north) in metres."""
+    lat_new = lat + north_m / 111_320.0
+    lon_new = lon + east_m / (111_320.0 * math.cos(math.radians(lat)))
+    return lat_new, lon_new
+
+
+def _demo_rng(seed: int) -> int:
+    return seed & 0xFFFFFFFF
+
+
+def _spread_m(seed: int, span_m: float) -> float:
+    """Deterministic value in [-span_m/2, +span_m/2]."""
+    return ((seed % 1000) / 999.0 - 0.5) * span_m
+
+
+def sensors_for_scenario(sensors_cfg: dict[str, Any], scenario_path: str) -> tuple[dict[str, dict], dict]:
+    """
+    Per-scenario drone layout: optional explicit override in sensors.json,
+    otherwise a deterministic shift of the base triangle (reproducible per WAV).
+    """
+    stem = Path(scenario_path).name
+    base_sensors: dict[str, dict] = sensors_cfg["sensors"]
+    source: dict = dict(sensors_cfg.get("scenario_sources", {}).get(stem) or sensors_cfg["demo_source"])
+
+    overrides = sensors_cfg.get("scenario_overrides", {}).get(stem)
+    if overrides:
+        if "demo_source" in overrides:
+            source = dict(overrides["demo_source"])
+        shift_e = float(overrides.get("shift_e_m", 0.0))
+        shift_n = float(overrides.get("shift_n_m", 0.0))
+        drone_ov = overrides.get("drones", {})
+        out: dict[str, dict] = {}
+        for sid in sorted(base_sensors):
+            if sid in drone_ov:
+                out[sid] = {**base_sensors[sid], **drone_ov[sid]}
+            else:
+                lat, lon = _offset_latlon(
+                    base_sensors[sid]["lat"],
+                    base_sensors[sid]["lon"],
+                    shift_e,
+                    shift_n,
+                )
+                out[sid] = {**base_sensors[sid], "lat": round(lat, 6), "lon": round(lon, 6)}
+        return out, source
+
+    seed = _demo_rng(hash(stem))
+    shift_e = _spread_m(seed, 520.0)
+    shift_n = _spread_m(seed ^ 0xA5A5A5A5, 520.0)
+
+    out = {}
+    for sid in sorted(base_sensors):
+        pos = base_sensors[sid]
+        ds = _demo_rng(hash((stem, sid)))
+        jitter_e = _spread_m(ds, 280.0)
+        jitter_n = _spread_m(ds ^ 0x3C3C3C3C, 280.0)
+        lat, lon = _offset_latlon(
+            pos["lat"], pos["lon"], shift_e + jitter_e, shift_n + jitter_n,
+        )
+        out[sid] = {
+            "lat": round(lat, 6),
+            "lon": round(lon, 6),
+            "alt_m": pos["alt_m"],
+        }
+
+    if stem not in sensors_cfg.get("scenario_sources", {}):
+        src_seed = _demo_rng(hash((stem, "source")))
+        slat, slon = _offset_latlon(
+            source["lat"], source["lon"],
+            _spread_m(src_seed, 380.0),
+            _spread_m(src_seed ^ 0x51EE51EE, 380.0),
+        )
+        source = {**source, "lat": round(slat, 6), "lon": round(slon, 6)}
+
+    return out, source
+
+
 def _tdoa_error_estimates(
     sensor_id: str,
     path: str,
@@ -737,8 +814,7 @@ def expand_to_sensor_observations(
     base: dict,
     sensors_cfg: dict[str, Any],
 ) -> list[dict]:
-    sensors: dict[str, dict] = sensors_cfg["sensors"]
-    source = sensors_cfg["demo_source"]
+    sensors, source = sensors_for_scenario(sensors_cfg, base["path"])
     base_ns = base["timestamp_ns"]
 
     offsets = {sid: _toa_offset_ns(pos, source) for sid, pos in sensors.items()}
