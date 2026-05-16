@@ -39,7 +39,7 @@ async def stream(websocket):
 async def main():
     async with websockets.serve(stream, HOST, PORT):
         print(f"Mock tactical feed ws://{HOST}:{PORT}")
-        print("Open demo/index.html → CONNECT (or ?ws=ws://localhost:8765)")
+        print("Open ui/index.html → CONNECT (or ?ws=ws://localhost:8765)")
         await asyncio.Future()
 
 

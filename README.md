@@ -6,8 +6,9 @@ Tactical map (WebSocket demo) + audio detection pipeline for military sound even
 
 ```
 Junction_Defence_Hackathon/
-├── index.html              # Tactical map UI
-├── mock_ws_server.py       # WebSocket demo server
+├── ui/
+│   ├── index.html          # Tactical map UI
+│   └── mock_ws_server.py   # WebSocket demo server
 ├── detection/
 │   ├── build_scenarios.py  # Generate UAV mix WAVs → data/scenarios/
 │   └── detect_audio.py     # Classify audio → JSON
@@ -25,8 +26,8 @@ Junction_Defence_Hackathon/
 
 ```bash
 pip install websockets
-python mock_ws_server.py
-# Open index.html in the browser
+python ui/mock_ws_server.py
+# Open ui/index.html in the browser
 ```
 
 ### Audio pipeline
