@@ -1,4 +1,4 @@
-# `triangulation/` — TDOA acoustic source localisation
+ # `triangulation/` — TDOA acoustic source localisation
 
 Takes the per-drone detection JSON produced by `detection/`, runs
 time-difference-of-arrival (TDOA) on every relevant scenario, and
@@ -135,10 +135,48 @@ Coordinate system notes:
   may want either: `cloud_latlon` (drop onto a real map) or
   `cloud_xy_local` (plot in a metric reference frame).
 
-The `localization_confidence` field is a smooth `1 / (1 + CEP50/25m)`
-mapping — 25 m of error halves the confidence, sub-metre approaches
-1.0. Tune the scale at the top of `locate.py` if a different curve
-makes more sense for downstream consumers.
+### Accuracy metrics explained
+
+**`cep50_m`** — Circular Error Probable at 50%. The radius of a circle
+centred on the source estimate within which 50% of the Monte-Carlo
+samples landed. This is the primary accuracy number: there is a 50%
+chance the real source lies within this many metres of the predicted
+point.
+
+**`cep95_m_approx`** — Same idea at 95% confidence, approximated as
+`cep50 × 2.08` (Rayleigh distribution hint). There is a ~95% chance
+the real source is within this radius.
+
+**`zone_area_m2`** — Area of the 95% confidence ellipse in square
+metres (π × major × minor). Gives a sense of the total search area
+implied by the uncertainty.
+
+**`gdop`** — Geometric Dilution of Precision. Ratio of the ellipse's
+major axis to its minor axis (always ≥ 1). A value of 1.0 means the
+uncertainty is a perfect circle; higher values mean the error is
+stretched preferentially in one direction. GDOP is driven by the
+geometry of the drone formation relative to the source — drones
+spread evenly around the source give low GDOP; drones clustered on
+one side give high GDOP.
+
+**`localization_confidence`** — A single 0–1 score computed as
+`1 / (1 + CEP50/25m)`. At 25 m CEP50 the score is 0.5; sub-metre
+approaches 1.0; 100 m gives ~0.2. Tune the 25 m scale constant at
+the top of `locate.py` if a different curve suits your use case.
+
+**`bearing_from_first_drone_deg`** — Direction from the
+lexicographically first drone to the estimated source, clockwise from
+north (0° = north, 90° = east, 180° = south).
+
+**`distance_from_first_drone_m`** — Slant distance in the local plane
+from that same drone to the source estimate, in metres.
+
+**`cloud_latlon` / `cloud_xy_local`** — 72-point closed polygon
+tracing the confidence ellipse (last point repeats the first).
+`cloud_latlon` is ready to drop onto any map as a polygon layer;
+`cloud_xy_local` is the same shape in local-plane metres for metric
+calculations. The ellipse level is set by `--confidence` (default
+0.95).
 
 ## Layout
 
