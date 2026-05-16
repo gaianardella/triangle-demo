@@ -1,0 +1,25 @@
+{
+  "demo_source": {
+    "lat": 62.410,
+    "lon": 25.750,
+    "alt_m": 0,
+    "comment": "Synthetic threat location for TDOA time offsets (demo / offline WAV)"
+  },
+  "sensors": {
+    "drone_1": {
+      "lat": 62.412,
+      "lon": 25.748,
+      "alt_m": 42
+    },
+    "drone_2": {
+      "lat": 62.408,
+      "lon": 25.754,
+      "alt_m": 38
+    },
+    "drone_3": {
+      "lat": 62.415,
+      "lon": 25.756,
+      "alt_m": 45
+    }
+  }
+}

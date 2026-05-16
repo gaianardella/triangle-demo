@@ -15,14 +15,18 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import sys
 import time
 from collections import Counter
 from pathlib import Path
+from typing import Any
 
 import librosa
 import numpy as np
 from scipy import signal
+
+from drone_denoise import load_drone_reference, preprocess_for_detection
 
 WINDOW_SIZE = 0.5
 HOP_SIZE = 0.25
@@ -31,6 +35,8 @@ SR = 22050
 DETECTION_DIR = Path(__file__).resolve().parent
 REPO_ROOT = DETECTION_DIR.parent
 OUTPUT_DIR = DETECTION_DIR / "output"
+SENSORS_PATH = DETECTION_DIR / "sensors.json"
+SPEED_OF_SOUND_M_S = 343.0
 DATA_DIR = REPO_ROOT / "data"
 SAMPLES_DIR = DATA_DIR / "samples"
 DRONE_REF_PATH = SAMPLES_DIR / "drone" / "uas_drone_pass_dcpoke.wav"
@@ -60,6 +66,29 @@ GUNSHOT_DIR = DATA_DIR / (
 def _cancel_wind_noise(audio, sr):
     b, a = signal.butter(4, 200 / (sr / 2), btype="high")
     return signal.filtfilt(b, a, audio)
+
+
+def _chunk_for_classify(chunk: np.ndarray, sr: int, apply_wind_hp: bool) -> np.ndarray:
+    if apply_wind_hp:
+        return _cancel_wind_noise(chunk, sr)
+    return chunk
+
+
+def prepare_audio_for_detection(
+    audio: np.ndarray,
+    sr: int,
+    *,
+    denoise: bool = True,
+) -> tuple[np.ndarray, bool]:
+    """
+    Optional UAV front-end (notch + adaptive spectral sub + REPET).
+    Returns (audio, apply_wind_hp) for per-chunk classifiers.
+    """
+    if not denoise:
+        return audio, True
+    ref = load_drone_reference(DRONE_REF_PATH, sr, len(audio))
+    processed = preprocess_for_detection(audio, sr, ref)
+    return processed, False
 
 
 MIN_RMS = 0.002
@@ -217,8 +246,8 @@ def classify_tank(audio, sr):
     return None, 0.0
 
 
-def classify_chunk(audio_chunk, sr):
-    clean = _cancel_wind_noise(audio_chunk, sr)
+def classify_chunk(audio_chunk, sr, apply_wind_hp: bool = True):
+    clean = _chunk_for_classify(audio_chunk, sr, apply_wind_hp)
     label, conf = classify_gunshot(clean, sr)
     if label:
         return label, conf
@@ -232,7 +261,9 @@ def classify_chunk(audio_chunk, sr):
     return None, 0.0
 
 
-def _scan_onset_windows(audio: np.ndarray, sr: int, n_peaks: int = 6) -> list[str]:
+def _scan_onset_windows(
+    audio: np.ndarray, sr: int, n_peaks: int = 6, apply_wind_hp: bool = True,
+) -> list[str]:
     """Classify windows at energy-onset peaks (rare events in the mix)."""
     frame = int(sr * 0.02)
     if len(audio) < frame * 4:
@@ -254,20 +285,22 @@ def _scan_onset_windows(audio: np.ndarray, sr: int, n_peaks: int = 6) -> list[st
         chunk = audio[start:start + ws]
         if len(chunk) < ws:
             chunk = np.pad(chunk, (0, ws - len(chunk)))
-        label, _ = classify_chunk(chunk, sr)
+        label, _ = classify_chunk(chunk, sr, apply_wind_hp=apply_wind_hp)
         if label in ("gunshot", "missile_launch"):
             labels.append(label)
     return labels
 
 
-def scan_audio_for_events(audio, sr):
+def scan_audio_for_events(audio, sr, apply_wind_hp: bool = True):
     window_samples = int(WINDOW_SIZE * sr)
     hop_samples = int(HOP_SIZE * sr)
     if len(audio) < window_samples:
         return []
     detected = []
     for start in range(0, len(audio) - window_samples, hop_samples):
-        label, _ = classify_chunk(audio[start:start + window_samples], sr)
+        label, _ = classify_chunk(
+            audio[start:start + window_samples], sr, apply_wind_hp=apply_wind_hp,
+        )
         if label:
             detected.append(label)
     return detected
@@ -336,7 +369,7 @@ def _missile_window_ok(clean: np.ndarray, sr: int) -> bool:
     )
 
 
-def _gunshot_at_peak(audio: np.ndarray, sr: int) -> bool:
+def _gunshot_at_peak(audio: np.ndarray, sr: int, apply_wind_hp: bool = True) -> bool:
     frame = int(sr * 0.01)
     if len(audio) < frame * 4:
         return False
@@ -350,7 +383,7 @@ def _gunshot_at_peak(audio: np.ndarray, sr: int) -> bool:
     chunk = audio[start:start + ws]
     if len(chunk) < ws:
         chunk = np.pad(chunk, (0, ws - len(chunk)))
-    return _gunshot_window_ok(_cancel_wind_noise(chunk, sr), sr)
+    return _gunshot_window_ok(_chunk_for_classify(chunk, sr, apply_wind_hp), sr)
 
 
 def _gunshot_window_ok(clean: np.ndarray, sr: int) -> bool:
@@ -363,14 +396,16 @@ def _gunshot_window_ok(clean: np.ndarray, sr: int) -> bool:
     return _spike_duration(feat) <= GUNSHOT_SPIKE_MAX_S
 
 
-def _has_confirmed_gunshot(audio: np.ndarray, sr: int, n_peaks: int = 10) -> bool:
+def _has_confirmed_gunshot(
+    audio: np.ndarray, sr: int, n_peaks: int = 10, apply_wind_hp: bool = True,
+) -> bool:
     """Short impulsive gunshot in mix (onset peaks or sliding windows)."""
     ws = int(WINDOW_SIZE * sr)
     hop = int(HOP_SIZE * sr)
 
     for start in range(0, len(audio) - ws, hop):
         chunk = audio[start:start + ws]
-        if _gunshot_window_ok(_cancel_wind_noise(chunk, sr), sr):
+        if _gunshot_window_ok(_chunk_for_classify(chunk, sr, apply_wind_hp), sr):
             return True
 
     frame = int(sr * 0.02)
@@ -391,20 +426,24 @@ def _has_confirmed_gunshot(audio: np.ndarray, sr: int, n_peaks: int = 10) -> boo
         chunk = audio[start:start + ws]
         if len(chunk) < ws:
             chunk = np.pad(chunk, (0, ws - len(chunk)))
-        if _gunshot_window_ok(_cancel_wind_noise(chunk, sr), sr):
+        if _gunshot_window_ok(_chunk_for_classify(chunk, sr, apply_wind_hp), sr):
             return True
-    return _gunshot_at_peak(audio, sr)
+    return _gunshot_at_peak(audio, sr, apply_wind_hp=apply_wind_hp)
 
 
 def _gunshot_prominent_in_mix(
-    audio: np.ndarray, sr: int, *, min_ratio: float = GUNSHOT_PROMINENT_PEAK_RATIO,
+    audio: np.ndarray,
+    sr: int,
+    *,
+    min_ratio: float = GUNSHOT_PROMINENT_PEAK_RATIO,
+    apply_wind_hp: bool = True,
 ) -> bool:
     """Strong gunshot-scale impulse (vs weak chirps in UAV+forest)."""
     ws = int(WINDOW_SIZE * sr)
     hop = int(HOP_SIZE * sr)
     best = 0.0
     for start in range(0, len(audio) - ws, hop):
-        clean = _cancel_wind_noise(audio[start:start + ws], sr)
+        clean = _chunk_for_classify(audio[start:start + ws], sr, apply_wind_hp)
         label, _ = classify_gunshot(clean, sr)
         if label != "gunshot":
             continue
@@ -414,13 +453,15 @@ def _gunshot_prominent_in_mix(
     return best >= min_ratio
 
 
-def _has_confirmed_missile(audio: np.ndarray, sr: int, n_peaks: int = 10) -> bool:
+def _has_confirmed_missile(
+    audio: np.ndarray, sr: int, n_peaks: int = 10, apply_wind_hp: bool = True,
+) -> bool:
     ws = int(WINDOW_SIZE * sr)
     hop = int(HOP_SIZE * sr)
 
     for start in range(0, len(audio) - ws, hop):
         chunk = audio[start:start + ws]
-        if _missile_window_ok(_cancel_wind_noise(chunk, sr), sr):
+        if _missile_window_ok(_chunk_for_classify(chunk, sr, apply_wind_hp), sr):
             return True
 
     frame = int(sr * 0.02)
@@ -441,7 +482,7 @@ def _has_confirmed_missile(audio: np.ndarray, sr: int, n_peaks: int = 10) -> boo
         chunk = audio[start:start + ws]
         if len(chunk) < ws:
             chunk = np.pad(chunk, (0, ws - len(chunk)))
-        if _missile_window_ok(_cancel_wind_noise(chunk, sr), sr):
+        if _missile_window_ok(_chunk_for_classify(chunk, sr, apply_wind_hp), sr):
             return True
     return False
 
@@ -485,6 +526,7 @@ def finalize_military_label(
     sr: int,
     counts: Counter,
     onset_types: list[str] | None = None,
+    apply_wind_hp: bool = True,
 ) -> str | None:
     """Acoustic-only relevance: reject UAV+forest false alarms; recover buried gunshot/missile."""
     n = sum(counts.values()) or 1
@@ -505,7 +547,9 @@ def finalize_military_label(
         elif (
             counts.get("tank", 0) >= n * 0.45
             and counts["gunshot"] < max(4, int(n * 0.12))
-            and not _gunshot_prominent_in_mix(audio, sr, min_ratio=GUNSHOT_PEAK_RATIO * 1.75)
+            and not _gunshot_prominent_in_mix(
+                audio, sr, min_ratio=GUNSHOT_PEAK_RATIO * 1.75, apply_wind_hp=apply_wind_hp,
+            )
         ):
             label = None
         elif (
@@ -522,10 +566,10 @@ def finalize_military_label(
             label = None
         elif rotor and counts["gunshot"] < max(4, int(n * 0.12)):
             label = None
-        elif rotor and not _gunshot_prominent_in_mix(audio, sr):
+        elif rotor and not _gunshot_prominent_in_mix(audio, sr, apply_wind_hp=apply_wind_hp):
             label = None
     if label == "missile_launch":
-        if rotor and not _has_confirmed_missile(audio, sr):
+        if rotor and not _has_confirmed_missile(audio, sr, apply_wind_hp=apply_wind_hp):
             label = None
         elif (
             counts["missile_launch"] < max(4, int(n * 0.07))
@@ -552,19 +596,26 @@ def finalize_military_label(
     allow_gunshot_recovery = True
     if sparse_uav:
         allow_gunshot_recovery = (
-            _has_confirmed_gunshot(audio, sr)
-            and _gunshot_prominent_in_mix(audio, sr, min_ratio=GUNSHOT_RECOVERY_PEAK_RATIO)
+            _has_confirmed_gunshot(audio, sr, apply_wind_hp=apply_wind_hp)
+            and _gunshot_prominent_in_mix(
+                audio, sr, min_ratio=GUNSHOT_RECOVERY_PEAK_RATIO, apply_wind_hp=apply_wind_hp,
+            )
         )
     if (
         allow_gunshot_recovery
         and not cricket_gunshot_spam
-        and _gunshot_prominent_in_mix(audio, sr, min_ratio=GUNSHOT_RECOVERY_PEAK_RATIO)
-        and (_has_confirmed_gunshot(audio, sr) or _gunshot_at_peak(audio, sr))
+        and _gunshot_prominent_in_mix(
+            audio, sr, min_ratio=GUNSHOT_RECOVERY_PEAK_RATIO, apply_wind_hp=apply_wind_hp,
+        )
+        and (
+            _has_confirmed_gunshot(audio, sr, apply_wind_hp=apply_wind_hp)
+            or _gunshot_at_peak(audio, sr, apply_wind_hp=apply_wind_hp)
+        )
         and not _bird_like_chatter(audio, sr)
         and not _insect_ambient_profile(audio, sr)
     ):
         return "gunshot"
-    if _has_confirmed_missile(audio, sr):
+    if _has_confirmed_missile(audio, sr, apply_wind_hp=apply_wind_hp):
         weak_missile = (
             counts.get("tank", 0) >= n * 0.65
             and counts["missile_launch"] <= 3
@@ -603,30 +654,127 @@ def dominant_detection(detected_types, onset_types: list[str] | None = None):
     return counts.most_common(1)[0][0]
 
 
-def classify_audio_array(audio, sr=SR):
-    sliding = scan_audio_for_events(audio, sr)
-    onsets = _scan_onset_windows(audio, sr)
+def classify_audio_array(audio, sr=SR, denoise: bool = False):
+    audio, apply_wind_hp = prepare_audio_for_detection(audio, sr, denoise=denoise)
+    sliding = scan_audio_for_events(audio, sr, apply_wind_hp=apply_wind_hp)
+    onsets = _scan_onset_windows(audio, sr, apply_wind_hp=apply_wind_hp)
     counts = Counter(sliding)
     label = dominant_detection(sliding, onsets)
     label = filter_military_relevance(label, counts, onsets, audio, sr)
-    return finalize_military_label(label, audio, sr, counts, onsets)
+    return finalize_military_label(
+        label, audio, sr, counts, onsets, apply_wind_hp=apply_wind_hp,
+    )
 
 
-def classify_audio_file(audio_path, sr=SR):
+def classify_audio_file(audio_path, sr=SR, denoise: bool = False):
     audio, sr = librosa.load(audio_path, sr=sr)
-    return classify_audio_array(audio, sr)
+    return classify_audio_array(audio, sr, denoise=denoise)
+
+
+# ── Multi-sensor / TDOA payload ─────────────────────────────────────────────
+def load_sensors_config(path: Path = SENSORS_PATH) -> dict[str, Any] | None:
+    if not path.exists():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    r = math.radians
+    la1, lo1, la2, lo2 = r(lat1), r(lon1), r(lat2), r(lon2)
+    dla, dlo = la2 - la1, lo2 - lo1
+    a = math.sin(dla / 2) ** 2 + math.cos(la1) * math.cos(la2) * math.sin(dlo / 2) ** 2
+    return 6371000.0 * 2 * math.asin(min(1.0, math.sqrt(a)))
+
+
+def _toa_offset_ns(sensor: dict[str, float], source: dict[str, float]) -> int:
+    horiz = _haversine_m(sensor["lat"], sensor["lon"], source["lat"], source["lon"])
+    dz = sensor.get("alt_m", 0.0) - source.get("alt_m", 0.0)
+    dist_m = math.hypot(horiz, dz)
+    return int(dist_m / SPEED_OF_SOUND_M_S * 1e9)
+
+
+def _tdoa_error_estimates(
+    sensor_id: str,
+    path: str,
+    toa_offset_ns: int,
+    relevant: bool,
+) -> dict[str, float]:
+    """
+    Plausible demo uncertainties for triangulation UI (not measured — synthetic).
+    """
+    if not relevant:
+        return {
+            "time_prediction_error_us": 0.0,
+            "time_prediction_error_ms": 0.0,
+            "position_error_m": 0.0,
+        }
+
+    seed = hash((sensor_id, path)) & 0xFFFFFFFF
+    us = 0.5 + (seed % 28) * 0.12
+    ms = 3.2 + (seed % 87) * 0.1
+    geom_m = (toa_offset_ns / 1e9) * SPEED_OF_SOUND_M_S
+    position_m = 8.0 + (seed % 55) * 0.12 + min(geom_m * 0.2, 4.0)
+
+    return {
+        "time_prediction_error_us": round(us, 2),
+        "time_prediction_error_ms": round(ms, 2),
+        "position_error_m": round(position_m, 1),
+    }
+
+
+def _attach_tdoa_errors(row: dict) -> dict:
+    errs = _tdoa_error_estimates(
+        row.get("drone_id", "drone_1"),
+        row["path"],
+        int(row.get("toa_offset_ns", 0)),
+        bool(row.get("relevant", False)),
+    )
+    row.update(errs)
+    return row
+
+
+def expand_to_sensor_observations(
+    base: dict,
+    sensors_cfg: dict[str, Any],
+) -> list[dict]:
+    sensors: dict[str, dict] = sensors_cfg["sensors"]
+    source = sensors_cfg["demo_source"]
+    base_ns = base["timestamp_ns"]
+
+    offsets = {sid: _toa_offset_ns(pos, source) for sid, pos in sensors.items()}
+    t0 = min(offsets.values())
+
+    rows: list[dict] = []
+    for sid in sorted(sensors):
+        pos = sensors[sid]
+        row = dict(base)
+        row["drone_id"] = sid
+        row["position"] = {"lat": pos["lat"], "lon": pos["lon"], "alt_m": pos["alt_m"]}
+        row["event_time_ns"] = base_ns + (offsets[sid] - t0)
+        row["toa_offset_ns"] = offsets[sid] - t0
+        row["bearing"] = None
+        rows.append(_attach_tdoa_errors(row))
+    return rows
 
 
 # ── CLI / integration ───────────────────────────────────────────────────────
-def detect_file(path: Path, drone_id: str = "drone_1") -> dict:
+def detect_file(
+    path: Path,
+    drone_id: str = "drone_1",
+    denoise: bool = False,
+    sensors_cfg: dict[str, Any] | None = None,
+) -> dict | list[dict]:
     audio, sr = librosa.load(path, sr=SR)
-    events = scan_audio_for_events(audio, sr)
+    audio, apply_wind_hp = prepare_audio_for_detection(audio, sr, denoise=denoise)
+    events = scan_audio_for_events(audio, sr, apply_wind_hp=apply_wind_hp)
     sliding = events
-    onsets = _scan_onset_windows(audio, sr)
+    onsets = _scan_onset_windows(audio, sr, apply_wind_hp=apply_wind_hp)
     counts = Counter(sliding)
     label = dominant_detection(sliding, onsets)
     label = filter_military_relevance(label, counts, onsets, audio, sr)
-    label = finalize_military_label(label, audio, sr, counts, onsets)
+    label = finalize_military_label(
+        label, audio, sr, counts, onsets, apply_wind_hp=apply_wind_hp,
+    )
 
     frame_length = int(sr * 0.01)
     energy = np.array([
@@ -650,8 +798,7 @@ def detect_file(path: Path, drone_id: str = "drone_1") -> dict:
     else:
         label_human = LABEL_NOT_RELEVANT
 
-    return {
-        "drone_id":      drone_id,
+    base = {
         "path":          str(path),
         "label":         label,
         "label_human":   label_human,
@@ -663,12 +810,26 @@ def detect_file(path: Path, drone_id: str = "drone_1") -> dict:
         "bearing":       None,
     }
 
+    if sensors_cfg is not None:
+        return expand_to_sensor_observations(base, sensors_cfg)
+
+    base["drone_id"] = drone_id
+    base["toa_offset_ns"] = 0
+    return _attach_tdoa_errors(base)
+
 
 def print_result(result: dict, expected: str | None = None):
     name = Path(result["path"]).name
+    sid = result.get("drone_id", "")
+    prefix = f"{name}"
+    if sid:
+        prefix = f"{name} [{sid}]"
     label = result["label"]
     human = result["label_human"]
-    line = f"{name}: {human}"
+    line = f"{prefix}: {human}"
+    pos = result.get("position")
+    if pos:
+        line += f"  @ {pos['lat']:.3f},{pos['lon']:.3f}"
     if label:
         line += f" ({label})"
     if result["window_counts"]:
@@ -883,14 +1044,31 @@ def main():
         "-o", "--output",
         help="write JSON file (default with --folder: detection/output/events.json)",
     )
-    p.add_argument("--drone-id", default="drone_1", help="drone ID for TDOA / WebSocket payload")
+    p.add_argument("--drone-id", default="drone_1", help="sensor ID (only with --single-sensor)")
+    p.add_argument(
+        "--sensors",
+        type=Path,
+        default=SENSORS_PATH,
+        help="sensor positions JSON (default: detection/sensors.json → 3 rows per detection)",
+    )
+    p.add_argument(
+        "--single-sensor",
+        action="store_true",
+        help="one row per file with --drone-id instead of 3 drones from sensors file",
+    )
     p.add_argument("--benchmark", action="store_true", help="run DCASE, ESC-50, negative, samples tests")
     p.add_argument(
         "--negative",
         action="store_true",
         help="negative-sample false-alarm test only (data/samples/negative/)",
     )
+    p.add_argument(
+        "--denoise",
+        action="store_true",
+        help="UAV front-end: notch + adaptive spectral subtraction + REPET (needs data/samples/drone/)",
+    )
     args = p.parse_args()
+    denoise = args.denoise
 
     if args.negative:
         run_negative_samples_test()
@@ -912,7 +1090,24 @@ def main():
             sys.exit(1)
         return
 
-    results = [detect_file(f, drone_id=args.drone_id) for f in files]
+    sensors_cfg: dict[str, Any] | None = None
+    if not args.single_sensor:
+        sensors_cfg = load_sensors_config(args.sensors)
+        if sensors_cfg is None and not args.sensors.exists():
+            print(f"Note: no {args.sensors}, one row per file (--drone-id)", file=sys.stderr)
+        elif sensors_cfg is None:
+            print(f"Warning: could not read {args.sensors}", file=sys.stderr)
+
+    raw = [
+        detect_file(f, drone_id=args.drone_id, denoise=denoise, sensors_cfg=sensors_cfg)
+        for f in files
+    ]
+    results: list[dict] = []
+    for item in raw:
+        if isinstance(item, list):
+            results.extend(item)
+        else:
+            results.append(item)
     payload = json.dumps(results, indent=2, ensure_ascii=False)
 
     out_path: Path | None = None
@@ -931,7 +1126,9 @@ def main():
         print(payload)
         return
 
-    print("── Detection (4 classes) ───────────────────────────────")
+    mode = "UAV denoise on" if denoise else "UAV denoise off"
+    n_sensors = len(sensors_cfg["sensors"]) if sensors_cfg else 1
+    print(f"── Detection (4 classes, {mode}, {n_sensors} sensor row(s) per file) ──")
     for r in results:
         print_result(r)
 
@@ -939,8 +1136,12 @@ def main():
         military_hints = {"tank": "tank", "gunshot": "gunshot", "missile": "missile_launch"}
         ambient_keys = ("bird", "crickets", "dog", "frog", "animal")
         print("\n── Filename hints (sanity check) ───────────────────────")
+        seen_paths: set[str] = set()
         for r in results:
             name = Path(r["path"]).name.lower()
+            if name in seen_paths:
+                continue
+            seen_paths.add(name)
             if any(k in name for k in ambient_keys):
                 ok = not r["label"]
                 line = ("✅ " if ok else "⚠️ ") + f"{Path(r['path']).name}: {r['label_human']}"
