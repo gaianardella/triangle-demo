@@ -5,7 +5,7 @@
     "label": null,
     "label_human": "Not relevant",
     "relevant": false,
-    "timestamp_ns": 1778931577458342912,
+    "timestamp_ns": 1778931723461402880,
     "confidence": 0.0,
     "window_counts": {
       "tank": 49,
@@ -21,7 +21,7 @@
     "label": null,
     "label_human": "Not relevant",
     "relevant": false,
-    "timestamp_ns": 1778931577590273024,
+    "timestamp_ns": 1778931723550759936,
     "confidence": 0.0,
     "window_counts": {
       "tank": 35,
@@ -38,7 +38,7 @@
     "label": null,
     "label_human": "Not relevant",
     "relevant": false,
-    "timestamp_ns": 1778931577733957888,
+    "timestamp_ns": 1778931723651536896,
     "confidence": 0.0,
     "window_counts": {
       "drone": 1,
@@ -53,7 +53,7 @@
     "label": null,
     "label_human": "Not relevant",
     "relevant": false,
-    "timestamp_ns": 1778931577857563136,
+    "timestamp_ns": 1778931723732920832,
     "confidence": 0.0,
     "window_counts": {
       "gunshot": 23,
@@ -68,7 +68,7 @@
     "label": null,
     "label_human": "Not relevant",
     "relevant": false,
-    "timestamp_ns": 1778931568646725120,
+    "timestamp_ns": 1778931714479702016,
     "confidence": 0.0,
     "window_counts": {
       "tank": 50,
@@ -84,7 +84,7 @@
     "label": null,
     "label_human": "Not relevant",
     "relevant": false,
-    "timestamp_ns": 1778931568778562048,
+    "timestamp_ns": 1778931714568780800,
     "confidence": 0.0,
     "window_counts": {
       "tank": 34,
@@ -100,7 +100,7 @@
     "label": "gunshot",
     "label_human": "Gunfire",
     "relevant": true,
-    "timestamp_ns": 1778931578247645184,
+    "timestamp_ns": 1778931723995227136,
     "confidence": 0.017543859649122806,
     "window_counts": {
       "tank": 49,
@@ -117,7 +117,7 @@
     "label": "gunshot",
     "label_human": "Gunfire",
     "relevant": true,
-    "timestamp_ns": 1778931578380781824,
+    "timestamp_ns": 1778931724086002944,
     "confidence": 0.05555555555555555,
     "window_counts": {
       "tank": 33,
@@ -133,7 +133,7 @@
     "label": "missile_launch",
     "label_human": "Missile / UCAS launch",
     "relevant": true,
-    "timestamp_ns": 1778931578511614976,
+    "timestamp_ns": 1778931724177631232,
     "confidence": 0.06521739130434782,
     "window_counts": {
       "tank": 42,
@@ -149,7 +149,7 @@
     "label": "missile_launch",
     "label_human": "Missile / UCAS launch",
     "relevant": true,
-    "timestamp_ns": 1778931578649726208,
+    "timestamp_ns": 1778931724274849024,
     "confidence": 0.19047619047619047,
     "window_counts": {
       "tank": 17,
@@ -164,13 +164,13 @@
     "label": "tank",
     "label_human": "Tank engine",
     "relevant": true,
-    "timestamp_ns": 1778931578782466048,
-    "confidence": 0.9473684210526315,
+    "timestamp_ns": 1778931724361440000,
+    "confidence": 0.9661016949152542,
     "window_counts": {
-      "tank": 54,
-      "drone": 3
+      "tank": 57,
+      "drone": 2
     },
-    "windows_total": 57,
+    "windows_total": 59,
     "bearing": null
   },
   {
@@ -179,14 +179,14 @@
     "label": "tank",
     "label_human": "Tank engine",
     "relevant": true,
-    "timestamp_ns": 1778931578819504128,
-    "confidence": 0.918918918918919,
+    "timestamp_ns": 1778931724351671808,
+    "confidence": 0.9347826086956522,
     "window_counts": {
-      "tank": 34,
+      "tank": 43,
       "missile_launch": 2,
       "drone": 1
     },
-    "windows_total": 37,
+    "windows_total": 46,
     "bearing": null
   }
 ]

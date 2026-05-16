@@ -1,0 +1,20 @@
+# macOS
+.DS_Store
+._*
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Datasets (large — download or extract locally)
+data/ESC-50/
+data/DCASE2017/
+data/archives/
+data/freesound/
+data/samples/
+
+# Nested dataset repos
+data/ESC-50/.git/
+docs/
