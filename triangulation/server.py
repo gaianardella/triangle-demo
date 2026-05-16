@@ -408,21 +408,30 @@ def _compute_bandwidth_data() -> dict:
         sc = r["scenario"]
         if sc not in per_scenario:
             per_scenario[sc] = {
-                "tactical_count":    0,
-                "loc_count":         0,
-                "mesh_bytes":        0,
-                "json_bytes":        0,
-                "last_tactical":     None,
-                "last_loc_summary":  None,
+                "tactical_count":      0,
+                "loc_count":           0,
+                "mesh_bytes":          0,
+                "json_bytes":          0,
+                # Split by packet type so the UI can reveal them phase-by-phase
+                "tactical_mesh_bytes": 0,
+                "tactical_json_bytes": 0,
+                "loc_mesh_bytes":      0,
+                "loc_json_bytes":      0,
+                "last_tactical":       None,
+                "last_loc_summary":    None,
             }
         ps = per_scenario[sc]
         ps["mesh_bytes"] += r["mesh_bytes"]
         ps["json_bytes"] += r["json_bytes"]
         if r["kind"] == "tactical":
-            ps["tactical_count"] += 1
+            ps["tactical_count"]      += 1
+            ps["tactical_mesh_bytes"] += r["mesh_bytes"]
+            ps["tactical_json_bytes"] += r["json_bytes"]
             ps["last_tactical"] = r
         else:
-            ps["loc_count"] += 1
+            ps["loc_count"]      += 1
+            ps["loc_mesh_bytes"] += r["mesh_bytes"]
+            ps["loc_json_bytes"] += r["json_bytes"]
             ps["last_loc_summary"] = r
 
     # ── Grand totals ──
@@ -466,7 +475,7 @@ def _compute_bandwidth_data() -> dict:
             "tactical_packets": len(tactical_rows),
             "loc_packets":      len(loc_rows),
         },
-        # Public view — totals only (no last_* to keep payload small)
+        # Public view — totals + split by packet type; no last_* blobs
         "per_scenario": {
             sc: {k: v for k, v in ps.items()
                  if k not in ("last_tactical", "last_loc_summary")}

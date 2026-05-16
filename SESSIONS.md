@@ -1,44 +1,6 @@
 # Implementation Sessions — Defense Hackathon
 
-Architectural plan for upgrading the existing detection → triangulation
-demo into a full *detect → decide → respond* operational story. Each
-session below is a self-contained chunk of work for a focused Sonnet
-implementation pass. Sessions are ordered by dependency; within a level
-they can run in parallel.
-
-## How to use this document
-
-- **Read the "Common architecture" section first** — it sets vocabulary
-  and conventions every session relies on.
-- **Each session ships its own acceptance criteria.** Don't move on
-  until the listed checks pass.
-- **`⚠ HUMAN INPUT`** markers flag points where Sonnet should stop and
-  ask before implementing — usually a values/thresholds decision, a
-  visual style choice, or a class priority list.
-- **`💡 NOTE`** markers flag a non-obvious design choice that Sonnet
-  should preserve, not "improve away".
-
-## Dependency graph
-
-```
-Session 1 (ROE)  ─┬─→  Session 3 (Respond anim) ──→  Session 4 (Recon UI)
-                  ├─→  Session 5 (Multi-threat)
-                  └─→  Session 18 (Live Ops tab)
-Session 2 (Jam)  ─┴─→  Session 5 (Multi-threat)
-Session 6 (Mesh narrative)   — independent, anytime
-Session 7 (Audio)            — independent, anytime (frontend only)
-
-Session 18 (Live Ops tab) depends on:
-  Session 7  (tab framework — see SESSIONS_INTERACTIVE.md)
-  Session 8  (Flask backend — see SESSIONS_INTERACTIVE.md)
-  Session 11 (2-drone hyperbola — see ROADMAP.md "New session specifications")
-  Session 13 (kill-drone button — see ROADMAP.md "New session specifications")
-  Session 14 (source icon + cones — see ROADMAP.md "New session specifications")
-```
-
-Recommended order if implementing sequentially: 1, 2, 3, 4, 5, 6, 7, 18.
-Session 18 picks up after Sessions 7–14 are integrated (sandbox tab,
-sliders, 2-drone math, kill button, source icon all in place).
+Unified reference — all 18 sessions in one place, in order.
 
 ---
 
@@ -94,6 +56,8 @@ sliders, 2-drone math, kill button, source icon all in place).
 
 Reuse these. Do not introduce new palette colours unless an entirely
 new entity class is added (and even then, prefer to reuse + opacity).
+
+---
 
 ---
 
@@ -206,6 +170,8 @@ function. This makes it unit-testable and trivially swappable.
 
 ---
 
+---
+
 ## Session 2 — Jamming Mode Support (Backend)
 
 ### Goal
@@ -315,6 +281,8 @@ error fields scaled and a `jam_status` field added per row for UI display.
 - `scenario_variant` and `jam_status_per_drone` present on jammed
   entries, absent (or null) on clean entries.
 - The convenience script produces both files in one invocation.
+
+---
 
 ---
 
@@ -460,6 +428,8 @@ via the same `upsertEntity()` mechanism — new icon in `ICONS` table.
 
 ---
 
+---
+
 ## Session 4 — Recon Imagery + Telemetry Log (Frontend)
 
 ### Goal
@@ -584,6 +554,8 @@ overlaid on the image.
 
 ---
 
+---
+
 ## Session 5 — Multi-Threat Priority Stack (Backend + Frontend)
 
 ### Goal
@@ -681,6 +653,8 @@ Each row shows: label, MGRS, CEP50, recommended action chip.
 
 ---
 
+---
+
 ## Session 6 — Mesh Network Narrative (Docs)
 
 ### Goal
@@ -751,7 +725,155 @@ The document has three sections:
 
 ---
 
-## Session 7 — Ambient & Event Audio (Frontend)
+---
+
+## Session 7 — Scenario sidebar + phase stepper
+
+### Goal
+
+Replace `tickPlayback`'s auto-advance with a step-based playback engine
+driven by user clicks. Five scenarios live in a left sidebar; the
+currently selected one drives the map. Phases advance only on
+▶ NEXT (or auto-play toggle).
+
+### Files touched
+
+- Modified: `ui/index.html` only
+
+### Architecture
+
+Rework the state machine around a single source of truth: `state.step`:
+
+```js
+state = {
+  ...,
+  scenarioIndex: 0,        // which of 5 scenarios is active
+  step: 0,                 // 0 = PATROL, 1 = DETECT, ..., 5 = COMPLETE
+  stepProgress: 0,         // 0..1 within the current step's animation
+  autoplay: false,         // if true, steps advance themselves
+  scenarios: [...]         // 5 entries; each has frames-like data
+}
+
+PHASES = [
+  { id: "patrol",    label: "PATROL · standby",         dur: 0 },
+  { id: "detect",    label: "DETECT · audio event",     dur: 1500 },
+  { id: "localize",  label: "LOCALIZE · TDOA cloud",    dur: 2200 },
+  { id: "decide",    label: "DECIDE · ROE evaluation",  dur: 1000 },
+  { id: "respond",   label: "RESPOND · action exec",    dur: 4500 },
+  { id: "complete",  label: "COMPLETE · contact held",  dur: 0 },
+]
+```
+
+`tickPlayback(dt)` becomes phase-aware: it animates *within* a phase
+(progress 0→1) but **never advances to the next phase on its own**
+unless `state.autoplay` is true. The whole transit-blend code goes
+away; map view always centres on the current scenario's drone bounds.
+
+### Tasks
+
+1. **HTML scaffolding for the sidebar**
+   - 1.1 Add a `<div class="scenarios">` panel inside the existing left
+         column, above the legend. Five cards.
+   - 1.2 Each card: scenario thumbnail (small SVG of geometry), label,
+         live CEP50 readout, action chip.
+   - 1.3 Click a card → `setScenario(i)`.
+
+2. **HTML scaffolding for the step controls**
+   - 2.1 Add a `<div class="phase-controls">` at the bottom of the map
+         wrap, just above the existing `footer`.
+   - 2.2 Buttons: `⏪ PREV`, `▶ NEXT`, `⏵ AUTO`, `⟲ RESET`.
+   - 2.3 Disable PREV/NEXT at boundaries; AUTO toggles the autoplay
+         boolean.
+
+3. **State migration**
+   - 3.1 Add `state.scenarios[]`. On `loadLocalizations()`, populate
+         from the loaded JSON. Cap to 5 by default (or all if fewer).
+   - 3.2 Drop the existing `state.playback` (transit / listen /
+         localize / hold logic) and replace with the phase-step state.
+   - 3.3 Migrate the existing visuals (cloud, drones, targets) into a
+         phase-driven renderer.
+
+4. **Phase renderers**
+   - 4.1 `renderPatrol()` — drones in formation, gentle patrol wobble.
+   - 4.2 `renderDetect()` — drones light yellow as audio arrives;
+         emit pulses at each drone with a small timestamp label
+         (`+0 ms`, `+145 ms`, …).
+   - 4.3 `renderLocalize()` — cloud fades in (alpha grows 0→1), target
+         pin lands.
+   - 4.4 `renderDecide()` — ROE banner appears: red/amber/grey by
+         action; text from `entry.recommended_action_reason`.
+   - 4.5 `renderRespond()` — responder animation (existing Session 3
+         work). Multi-drone variant for SEARCH (Session 9).
+   - 4.6 `renderComplete()` — frozen final state; log summary.
+
+5. **NEXT / PREV / AUTO logic**
+   - 5.1 NEXT: snap to end of current phase (progress = 1) if not yet
+         there; if already at 1, advance to next phase.
+   - 5.2 PREV: snap to start of current phase if progress > 0;
+         otherwise step back.
+   - 5.3 AUTO: when on, advance to next phase the moment progress = 1.
+   - 5.4 RESET: scenarioIndex unchanged; step = 0; progress = 0; clear
+         transient state (cloud alpha, target pins).
+
+6. **Sidebar live updates**
+   - 6.1 Each card's CEP50 and action chip update when σ sliders change
+         (Session 8 dependency — show defaults until then).
+   - 6.2 Active card gets `--accent` border.
+   - 6.3 Hovering a card shows a tooltip with the per-drone σ values.
+
+7. **URL state (nice-to-have)**
+   - 7.1 `?scenario=2&step=3&sigma_t=12&sigma_pos=20` deep-links a
+         specific state. Useful for rehearsing the pitch.
+
+### Considerations
+
+- **💡 NOTE: the existing `transit` phase blend (camera pans between
+  scenarios) is being deleted.** This is intentional — operator
+  controls the map, not the playback. Don't try to preserve it.
+- **💡 NOTE: scenarios array is bounded.** Limit to 5 in the UI; if
+  the JSON has more, show the top 5 by `priority_rank`. Anything
+  more clutters the sidebar.
+- **💡 NOTE: phase durations are *animation* durations, not pacing.**
+  The presenter advances at their own speed; durations only matter
+  during the animation itself.
+- **⚠ Keyboard shortcuts.** Add `→` for NEXT, `←` for PREV, `space`
+  for AUTO toggle. Pitch flow uses keyboard, not mouse.
+
+### ⚠ HUMAN INPUT NEEDED
+
+1. **Which 5 scenarios?** The current `events.json` has scenarios like
+   `scenario_gunshot_mix`, `scenario_gunshot_preprocessed`,
+   `scenario_tank_preprocessed`, `scenario_missile_mix`. Suggested
+   curated set:
+   - ① clean gunshot (low σ_t, low σ_pos) → STRIKE
+   - ② degraded-timing gunshot (mid σ_t, low σ_pos) → borderline
+   - ③ GPS-denied gunshot (low σ_t, high σ_pos) → wide ellipse
+   - ④ tank (high severity) → STRIKE even at mid CEP
+   - ⑤ missile launch (high severity, high priority) → STRIKE
+   The team probably needs to either select 5 from the existing
+   `events.json` or generate 5 synthetic ones for clarity. Confirm.
+2. **Card thumbnail style.** Mini topdown of drones + dot? Just a
+   geometric symbol per geometry class? Suggested: a 60×60 SVG
+   showing three drone dots + a marker dot at the source.
+3. **Keyboard shortcuts.** Confirm `→ / ←` for NEXT/PREV.
+
+### Acceptance criteria
+
+- 5 scenario cards render in the sidebar.
+- Clicking a card switches the map to that scenario at phase 0.
+- ▶ NEXT advances one phase at a time; PREV steps back.
+- ⏵ AUTO advances phases automatically with the dialled-in durations.
+- ⟲ RESET returns the current scenario to phase 0.
+- Each card's CEP50 + action chip reflect the scenario's defaults.
+
+---
+
+---
+
+## Session 7B — Ambient & Event Audio (Frontend)
+
+> Originally 'Session 7' in SESSIONS.md; renumbered 7B to avoid conflict
+> with the phase-stepper Session 7 above.
 
 ### Goal
 
@@ -977,6 +1099,1623 @@ so there are no clicks.
   but does not crash the UI or block the animation loop.
 - `statFps` stays ≥ 55 — audio work is off the main thread via Web
   Audio; it must not drop frames.
+
+---
+
+---
+
+## Session 8 — Live error sliders + backend recompute
+
+### Goal
+
+Two sliders (σ_t, σ_pos) in the right rail. Dragging them re-runs the
+TDOA localisation in real time and updates the cloud, CEP50, action
+chip, and ROE banner. The math runs in Python via a small Flask backend
+so there's a single source of truth.
+
+### Files touched
+
+- New: `triangulation/server.py` (Flask app)
+- Modified: `ui/index.html` (sliders + fetch logic)
+- Modified: `triangulation/locate.py` (expose `localize_scenario` with
+  override sigmas)
+- Modified: `triangulation/__init__.py` (export `server`)
+
+### Architecture
+
+```
+Browser slider drag
+       │ debounce ~120 ms
+       ▼
+   fetch /api/scenarios/{id}?sigma_t_ms=X&sigma_pos_m=Y
+       │
+       ▼
+   Flask backend (triangulation/server.py)
+       │
+       ├── reads events.json (cached in memory)
+       │
+       ├── overrides per-event sigma_t_ms / position_error_m
+       │    on every row of the requested scenario
+       │
+       ├── calls localize_scenario(group, ..., mc_samples=120)
+       │    with the modified events (note: mc=120 for live, not 400)
+       │
+       └── returns the recomputed entry as JSON
+       │
+       ▼
+   Browser updates state.scenarios[i] in place, redraws
+```
+
+The backend reuses **the exact same `localize_scenario` function** that
+the offline pipeline uses, so there's no risk of the live recompute
+disagreeing with the JSON on disk.
+
+### New endpoints
+
+| Endpoint | Returns |
+|---|---|
+| `GET /api/scenarios` | list of all scenarios with default sigmas |
+| `GET /api/scenarios/<id>` | single scenario with default sigmas |
+| `GET /api/scenarios/<id>?sigma_t_ms=X&sigma_pos_m=Y` | live recompute |
+| `GET /api/events?scenario=<id>` | raw events for that scenario (debug) |
+| `GET /` | serves `ui/index.html` directly (no separate http server) |
+| `GET /<file>` | serves `ui/<file>` (CSS, JS, images, etc.) |
+
+### Right-rail slider visuals
+
+```
+┌─ Timing error σ_t ────────────────────────────────────┐
+│  ●─────────●─────────────────●─────────────● 20 ms   │
+│  0.1 µs   1 µs    100 µs   1 ms          20 ms      │
+│  GPS/PTP  good    NTP      cheap         unsynced   │
+│  ┃                ┃         ┃              ┃        │
+│  └─ current: 6.6 ms ────────────────┘               │
+└──────────────────────────────────────────────────────┘
+
+┌─ Position error σ_pos ────────────────────────────────┐
+│  ●─────●──────────●──────────●─────────────● 50 m    │
+│  0 m   1 m       5 m        15 m            50 m    │
+│  GPS   RTK       IMU/30s    IMU/2min   sustained    │
+└──────────────────────────────────────────────────────┘
+```
+
+Each slider is **log-scaled** for σ_t (sub-µs to ms span isn't useful
+linearly) and **linear** for σ_pos (0 to 50 m is fine linear). Marker
+positions correspond to operational regimes — these are pitch-bait
+because a defense judge knows immediately what they mean.
+
+A tiny inline SVG chart below the sliders shows the **error vs σ
+curve** for the current scenario — the "money curve" from the
+defensehackathon prototype, scaled down. A red dot marks the current
+operating point. As the slider moves, the dot moves; as σ goes
+inside/outside the STRIKE zone, a coloured band lights up.
+
+### Tasks
+
+1. **Backend: `triangulation/server.py`**
+   - 1.1 Flask app with the endpoints above.
+   - 1.2 Load `events.json` once at startup; cache `_group_by_scenario`
+         result in memory.
+   - 1.3 `_apply_sigma_overrides(events, sigma_t_ms, sigma_pos_m)`
+         helper: returns a new list where every row in the scenario
+         has the σ values overridden (if not 0/null).
+   - 1.4 Endpoint handler calls `localize_scenario(modified_events,
+         mc_samples=120)` and returns the resulting dict.
+   - 1.5 Cache recent recomputes (LRU, max 50 entries) so the same
+         slider value doesn't recompute twice.
+   - 1.6 CLI: `python -m triangulation.server --port 5050 [--host
+         0.0.0.0]`. Default port 5050 to avoid clashing with the
+         existing Dash viewer on 8060.
+
+2. **`localize_scenario` argument additions**
+   - 2.1 Add `sigma_t_override_ms: float | None = None` and
+         `sigma_pos_override_m: float | None = None` to the function
+         signature.
+   - 2.2 When non-None, apply to the events before MC. Document the
+         interaction with existing per-row σ values: override
+         *replaces*, not adds.
+
+3. **Frontend: slider components**
+   - 3.1 Two `<input type="range">` inputs in the right rail. Log
+         scale for time; linear for position. Show numeric readout.
+   - 3.2 Reference-regime markers under each slider (tick marks with
+         labels).
+   - 3.3 Debounce slider input to ~120 ms before firing fetch.
+         Drag-while-fetching is fine; the last fetch wins.
+
+4. **Frontend: fetch + state update**
+   - 4.1 `async function recomputeCurrentScenario()` fires
+         `/api/scenarios/<id>?...` and patches `state.scenarios[i]`
+         with the response.
+   - 4.2 The renderer automatically picks up the new cloud, target,
+         CEP, action chip on the next animation frame.
+   - 4.3 Loading indicator: a 1 px shimmer along the slider track.
+   - 4.4 Fetch errors silently revert to the last good value; one
+         log line per failure.
+
+5. **Money-curve inline chart**
+   - 5.1 100 × 60 SVG below the sliders. Log-log axes (clock σ vs
+         error). Pre-baked points: backend has another endpoint
+         `/api/scenarios/<id>/sweep` returning ~15 (σ, CEP) pairs at
+         the current geometry.
+   - 5.2 Red dot at the current operating point updates with the
+         slider.
+   - 5.3 Coloured background bands for STRIKE / RECON / SEARCH zones
+         (using the same thresholds as the policy module).
+
+6. **Reset to defaults**
+   - 6.1 A small "↺ default σ" button next to each slider. Clicks
+         restore the slider to the scenario's original per-drone
+         maximum from the JSON.
+
+### Considerations
+
+- **💡 NOTE: when σ overrides are applied, they're applied to *every
+  drone* in the scenario.** Per-drone override is more flexible but
+  far worse for UI clarity. The slider is asking "what if all the
+  drones had this much error?" not "what if drone_2 specifically did?"
+- **💡 NOTE: MC=120 for the live recompute, not 400.** Quality stays
+  fine (CEP estimate is stable within a few % at 120). Latency drops
+  to ~15–30 ms per call. Saves the demo from feeling sluggish.
+- **💡 NOTE: cache recent recomputes** (LRU by `(id, σ_t, σ_pos)`)
+  — sliders often retrace the same path during a pitch.
+- **⚠ Same backend, same Python process** serves the UI HTML. Don't
+  make people start two services. Flask `send_from_directory`
+  handles the static files.
+- **⚠ CORS isn't an issue** if the static files are served by the
+  same Flask app (preferred). If running the UI under a separate
+  http.server, add a permissive `Access-Control-Allow-Origin`.
+
+### ⚠ HUMAN INPUT NEEDED
+
+1. **Slider ranges and scale.** Suggested: σ_t **log** from 0.1 µs to
+   20 ms; σ_pos **linear** from 0 to 50 m. Confirm.
+2. **Regime markers.** Suggested labels:
+   - σ_t: `GPS/PTP (1 µs)`, `good NTP (500 µs)`, `cheap NTP (3 ms)`,
+     `unsynced (≥ 10 ms)`
+   - σ_pos: `GPS (1 m)`, `RTK (0.1 m)`, `IMU 30 s (5 m)`,
+     `IMU 2 min (15 m)`, `sustained denial (50 m)`
+   Confirm wording (especially for the IMU drift bands).
+3. **MC sample count for live.** Suggested 120 (target 30 ms). The
+   tradeoff is "ellipse jitters slightly as σ moves vs slider feels
+   sluggish". Confirm preference.
+4. **Should the money-curve inline chart be in v1?** Adds ~2 hours.
+   Suggested: yes — judges read it instantly and it's the single
+   most credibility-building element. Confirm.
+
+### Acceptance criteria
+
+- `python -m triangulation.server` starts on port 5050.
+- `http://localhost:5050/` serves the existing tactical UI.
+- σ_t and σ_pos sliders in the right rail update CEP50, cloud, target
+  position, action chip within ~150 ms of slider stop.
+- Reset button restores the scenario default.
+- Money-curve mini-chart present; red dot tracks slider.
+- ROE banner colour and text update live as the action flips.
+
+---
+
+---
+
+## Session 9 — SEARCH action + multi-drone area sweep
+
+### Goal
+
+When CEP50 is too large for a point-target response, the ROE engine
+emits a new `SEARCH` action. The respond phase then dispatches **all
+three drones** to spread across the confidence ellipse in a grid /
+spoke pattern. Visual: three responders fanning out, each sweeping
+their assigned subzone. Telemetry mentions "SEARCH PATTERN initiated ·
+sweeping XXX m²".
+
+### Files touched
+
+- Modified: `triangulation/policy.py` (extend `decide()`)
+- Modified: `triangulation/locate.py` (no functional change; output
+  field values change)
+- Modified: `ui/index.html` (multi-responder rendering in `respond`
+  phase, telemetry strings)
+- Modified: `SESSIONS.md` (mark Session 1 acceptance criteria as
+  extended)
+
+### Architecture
+
+```
+policy.decide(cep50, gdop, label, conf):
+  if conf < HOLD_FLOOR:        return HOLD
+  if cep50 < STRIKE_CEP_MAX
+     and gdop < STRIKE_GDOP_MAX
+     and label in STRIKE_ELIGIBLE:
+                                return STRIKE
+  if cep50 < SEARCH_FLOOR:     return RECON
+                                return SEARCH        ← NEW
+```
+
+For the visuals:
+
+```
+For SEARCH action, the respond phase animates:
+
+  1. All three drones break formation simultaneously.
+  2. Compute a 3-point sweep pattern inside the 95% ellipse:
+       - drone_1 → ellipse centre
+       - drone_2 → ellipse centre + 0.6·major_axis along +axis
+       - drone_3 → ellipse centre + 0.6·major_axis along −axis
+     (or a spoke pattern with the three points equiangular around
+      the centre — pick the more visually obvious layout)
+  3. Animate all three arcing to their sweep points.
+  4. On arrival, each drone shows a small "scanning" pulse for ~1 s.
+  5. Final state: three responders parked at sweep points, plus an
+     overlay polyline tracing the sweep coverage.
+```
+
+The existing `state.responders[]` slot already supports multiple
+responders — Session 3 designed it as a list. SEARCH just populates
+three entries instead of one.
+
+### Tasks
+
+1. **Backend: extend `policy.decide()`**
+   - 1.1 Add `SEARCH` to the `Action` literal type.
+   - 1.2 Add `SEARCH_FLOOR` constant (suggested: CEP50 > 50 m → SEARCH).
+   - 1.3 Add `severity = "low"` for SEARCH (not actionable, just
+         searching).
+   - 1.4 Add `weapons_release_required = false` for SEARCH.
+
+2. **Backend: expose search pattern in JSON**
+   - 2.1 When action is SEARCH, add a `search_pattern` field to the
+         output entry: `[{lat, lon, role}, ...]` with 3 sweep points
+         derived from the ellipse axes.
+   - 2.2 Add `search_pattern_xy_local` for completeness.
+   - 2.3 New helper in `policy.py`: `search_points(center_xy,
+         major_axis_xy, minor_axis_xy, n=3) -> list[(x, y)]`.
+
+3. **Backend: extend test cases**
+   - 3.1 Verify a high-σ scenario triggers SEARCH.
+   - 3.2 Verify `search_pattern` has 3 entries within the ellipse.
+
+4. **Frontend: action chip colour**
+   - 4.1 Add `--search` colour (suggested: `#1e9af0` blue — distinct
+         from STRIKE red and RECON amber).
+   - 4.2 Update chip styling switch in `renderDecide()` and the
+         sidebar cards.
+
+5. **Frontend: multi-responder rendering**
+   - 5.1 In `respond` phase, when action is SEARCH:
+         - Read `entry.search_pattern_xy_local`
+         - Spawn 3 responders simultaneously (vs 1 for STRIKE/RECON)
+         - Animate each on its own arc to its sweep point
+   - 5.2 On arrival, each shows a "scanning" pulse (existing
+         `emitPulse` helper).
+   - 5.3 Optional overlay: a faint dashed polyline drawing the sweep
+         coverage between the three points.
+
+6. **Frontend: SEARCH telemetry strings**
+   - 6.1 Add to the `TELEMETRY` table (from Session 4):
+       ```js
+       SEARCH: [
+         { at: 0.05, msg: "SEARCH PATTERN initiated · 3 drones deploying",  lvl: "warn" },
+         { at: 0.35, msg: "Drones on station · sweep underway",              lvl: "warn" },
+         { at: 0.70, msg: "No contact at primary point · expanding search",  lvl: "warn" },
+         { at: 0.92, msg: "Search incomplete · requesting more sensors",     lvl: "hostile" }
+       ]
+       ```
+       (Adjust wording with user — see Human Input.)
+
+7. **Frontend: HOLD-vs-SEARCH chip**
+   - 7.1 HOLD remains for "no usable fix" (confidence floor).
+   - 7.2 SEARCH replaces HOLD for "fix is real but too imprecise".
+   - 7.3 Make sure the action chip clearly distinguishes them
+         visually so judges don't conflate them.
+
+### Considerations
+
+- **💡 NOTE: 3 drones spreading vs 1 drone arcing is a 3× richer
+  visual.** Don't water it down to "one drone moving more slowly".
+  The multiple bodies are the point.
+- **💡 NOTE: ellipse-aware sweep**, not grid. The sweep points must
+  align with the major axis of the ellipse — that's *why* the
+  visual is interesting. A square grid in a long thin ellipse looks
+  wrong; a spoke pattern aligned to the axis looks right.
+- **💡 NOTE: SEARCH is recoverable.** Don't render it as "the
+  system failed". The narrative is "the system knew it didn't have
+  a confident fix and dispatched proportionate resources to gather
+  more information." That's a feature, not a bug.
+- **⚠ Backwards compatibility.** Existing consumers of
+  `recommended_action` will see a new enum value (`SEARCH`). They
+  shouldn't crash — but if any downstream code assumes a closed
+  set, it must be updated.
+
+### ⚠ HUMAN INPUT NEEDED
+
+1. **CEP50 threshold for SEARCH.** Suggested: > 50 m → SEARCH; ≤ 50 m
+   and > 10 m → RECON; ≤ 10 m → STRIKE. Confirm or override.
+2. **Sweep pattern.** Suggested: 3-point spoke aligned with ellipse
+   major axis. Alternative: equilateral triangle around centre. Pick
+   one.
+3. **Number of sweep drones.** Suggested: 3 (every drone). Could be
+   more if more drones exist. Confirm "all drones, every time" vs
+   "at least 2".
+4. **Sweep telemetry copy.** The draft above is generic. Lean more
+   military ("SECTOR SEARCH · ZONE BRAVO"), more operational
+   ("Drones on station, sweep underway"), or more diagnostic ("Cloud
+   area exceeds 5000 m², expanding search radius"). Confirm tone.
+
+### Acceptance criteria
+
+- `policy.decide(cep50=80, gdop=2, label="gunshot", confidence=0.4)`
+  returns `Decision(action="SEARCH", ...)`.
+- `localizations.json` entries with high CEP50 have
+  `recommended_action == "SEARCH"` and a 3-element
+  `search_pattern_xy_local`.
+- UI in `respond` phase shows three responders spreading to the
+  sweep points when action is SEARCH.
+- Action chip is distinct from STRIKE/RECON/HOLD in colour and
+  label.
+- Telemetry log for SEARCH plays the SEARCH-specific strings.
+
+---
+
+## Cross-session conventions (Part 2)
+
+- **All sliders are log-scale where the operational regimes span
+  decades.** Linear sliders compress the interesting region. σ_t is
+  log; σ_pos is linear (0–50 m is one decade, fine linear).
+- **All recomputes go through the existing Python pipeline.** Don't
+  port the math to JS. The backend is cheap; latency is fine.
+- **Phase advances are operator-driven by default**, autoplay is a
+  toggle, never the default. The pitch needs pacing control.
+- **Action chips and ROE banner are the same colour-coding everywhere**:
+  STRIKE red, RECON amber, SEARCH blue, HOLD grey. Don't deviate
+  in any rendering.
+- **Telemetry copy stays consistent across actions.** Each action's
+  4 lines hit similar beats (dispatch / arrival / progress / closure)
+  so the judge's eye learns the pattern.
+
+## What this leaves on the table
+
+- **Hand-drawn sweep paths inside the ellipse.** SEARCH currently
+  shows 3 points; a fuller demo would show curves traced by each
+  drone. ~2 hours of extra work; nice but not essential.
+- **Replay history.** When σ has been moved and recomputed many
+  times, there's no way to step back through the trajectory. Could
+  add an undo stack — out of scope here.
+- **Cross-scenario priority elevation.** With 5 scenarios in the
+  sidebar, dragging σ to extreme on scenario 1 doesn't change
+  scenario 4's priority. That'd be more realistic but is gold-plating
+  beyond the demo budget.
+
+---
+
+## Session 10 — Sandbox tab                             (≈4 h, spec: `SESSIONS_INTERACTIVE.md` §10)
+
+The sixth tab `🧪 Sandbox`: drag drones and source anywhere, tune σ
+with the same sliders, watch the cloud + estimate update in real
+time. Truth (user-placed source) is visible; estimate is computed;
+the distance between them is the actual error, drawn as a dashed
+line with a metres label.
+
+**Key tasks:**
+
+- New `triangulation/sandbox.py`: `build_events(drones, source,
+  sigma_t_ms, sigma_pos_m) -> events_list` synthesises a JSON event
+  group from a geometry config.
+- New `POST /api/sandbox` endpoint that calls `build_events` then
+  `localize_scenario`.
+- Pointer-drag handlers on the entity DOM layer; throttled fetch
+  during drag.
+- "OPEN IN SANDBOX" button on scenario tabs to copy their geometry.
+
+**Why it matters:** hand the laptop to a judge. Hackathons are won by
+the team whose demo the judge *plays with* rather than just *watches*.
+
+---
+
+## Session 11 — 2-drone bearing-only localization
+
+**Goal:** When only 2 drones detect an event, produce an honest fix
+— a hyperbola curve + an uncertainty wedge — and surface it through
+the same JSON contract as 3-drone fixes.
+
+**Files touched:**
+
+- New: `triangulation/core/solver_2drone.py`
+- Modified: `triangulation/locate.py` (route 2-drone groups here)
+- Modified: `triangulation/policy.py` (auto-downgrade 2-drone → SEARCH)
+- Modified: `triangulation/AGENTS.md` (schema update)
+- New: `triangulation/tests/test_2drone.py`
+
+**Architecture:**
+
+A 2-drone fix is fundamentally different from a 3-drone fix. The
+JSON output stays the same shape (`source`, `cloud_*`, `cep50_m`,
+`recommended_action`, etc.) but the semantics shift:
+
+```
+3-drone fix:
+   source         = point estimate (lat, lon)
+   cloud_latlon   = closed 95% ellipse polygon (~72 points)
+   cep50_m        = radius
+   fix_kind       = "point"          ← NEW field
+
+2-drone fix:
+   source         = midpoint of hyperbola arc (still lat, lon —
+                    a representative point on the curve)
+   hyperbola_latlon = list of (lat, lon) along the curve     ← NEW
+   cloud_latlon   = wedge polygon — outer boundary of the
+                    swept-uncertainty band on each side
+   cep50_m        = null (undefined for a curve)
+   cep50_perp_m   = perpendicular-to-curve half-width        ← NEW
+   fix_kind       = "bearing"        ← NEW field
+   bearing_axis_deg = orientation of the curve at midpoint   ← NEW
+```
+
+The hyperbola is parameterised: given drones at `p1, p2` and
+`Δd = c · (t2 - t1)`, the locus is the set of points where
+`||x - p1|| - ||x - p2|| = Δd`. Closed-form parameterisation in
+canonical coordinates (origin at midpoint, major axis along p1-p2
+direction): `x(t) = a · cosh(t)`, `y(t) = b · sinh(t)` with
+`a = Δd/2`, `b = sqrt(c² - a²)` where `c` is half the inter-drone
+distance. Then rotate and translate into the local plane.
+
+The wedge is computed by Monte-Carlo: for each (σ_t, σ_pos) draw,
+recompute the hyperbola; take the convex hull of all sampled
+hyperbola points to get the swept boundary; output the boundary as
+a closed polygon.
+
+**Subtasks:**
+
+- 11.1 `solver_2drone.hyperbola(p1, p2, dd, n_pts=64)` — return
+       N points along the hyperbola arc, clipped to a reasonable
+       extent (±2× inter-drone distance).
+- 11.2 `solver_2drone.mc_wedge(events, drone_positions,
+       clock_sigma_s, pos_sigma_m, n=400)` — MC sweep returning
+       a list of hyperbola polylines; the wedge boundary is the
+       convex hull of all points.
+- 11.3 Route in `locate.py`: when a group has exactly 2 distinct
+       drones, call `solver_2drone` instead of skipping; emit the
+       new schema fields.
+- 11.4 `policy.decide()`: when `fix_kind == "bearing"`, action is
+       always SEARCH (never STRIKE or RECON). Add a reason string:
+       "2-sensor bearing fix; insufficient for point engagement".
+- 11.5 UI rendering: in `localize` phase, when `fix_kind ==
+       "bearing"`, draw the hyperbola as a solid red curve and the
+       wedge as a translucent red band. Skip the cross marker (no
+       point estimate).
+- 11.6 Tests: synthetic 2-drone event → hyperbola passes through
+       the true source; wedge width scales with σ.
+
+**⚠ HUMAN INPUT NEEDED:**
+
+1. Hyperbola clipping extent. Suggested ±2× inter-drone distance
+   so the curve stays on-screen for typical drone separations.
+2. Should the UI label the curve "bearing locus" or "hyperbola"?
+   Suggested "bearing locus" — non-specialists understand.
+
+**Acceptance criteria:**
+
+- A 2-drone group in `events.json` produces a `localizations.json`
+  entry with `fix_kind == "bearing"`, a `hyperbola_latlon` polyline,
+  a `cloud_latlon` wedge polygon, and `recommended_action ==
+  "SEARCH"`.
+- UI renders the curve + band correctly when this entry plays.
+- 3-drone groups continue to produce `fix_kind == "point"` and
+  ellipse clouds (no regression).
+
+---
+
+## Session 12 — Multi-scene narrative tab
+
+**Goal:** Replace `① Gunshot · clean` with a 4-scene operational arc
+that walks PATROL → STRIKE → drone-lost → DEGRADED DETECTION →
+2-drone SEARCH. Tells the whole defense story in one tab.
+
+**Files touched:**
+
+- Modified: `ui/index.html` (tab state model, scene transition logic)
+- New: `detection/output/narrative_gunfire.json` (scene-sequence data)
+- Modified: `triangulation/server.py` (endpoint to load narratives)
+- Modified: `triangulation/locate.py` (optional: a CLI flag to
+  generate narrative scene data from synthetic events)
+
+**Architecture:**
+
+Each tab in the UI is now `{id, label, scenes: Scene[]}` where a
+plain single-scenario tab has `scenes.length == 1` and a narrative
+tab has `scenes.length > 1`. A `Scene` is an extended scenario:
+
+```json
+{
+  "scene_index": 0,
+  "title": "Initial detection — clean geometry",
+  "narrative_text": "Three sensor drones holding patrol. Acoustic
+                     event detected. Triangulation produces a tight
+                     fix. ROE: STRIKE.",
+  "drone_roster": ["drone_1", "drone_2", "drone_3"],
+  "drones_lost_before_scene": [],
+  "drones_lost_during_scene": [],
+  "scenario": { ... full localization entry ... },
+  "outcome": {
+    "drone_lost": null,                 // or e.g. "drone_3"
+    "next_scene_intro": "Drone 3 lost during engagement."
+  }
+}
+```
+
+The phase machinery from Session 7 applies WITHIN a scene. When the
+last phase (`complete`) finishes, ▶ NEXT advances to the next scene
+and restarts at `patrol`. ⏪ PREV at scene start jumps to the prior
+scene's `complete`.
+
+Drone-loss is **scripted**, not computed. The narrative file says
+"after scene 2's strike, drone_3 is lost". The UI honours this by:
+- Drawing drone_3 with a red ☓ overlay and dimmed fill from scene 3
+  onwards.
+- Leaving drone_3's icon at its scene-2 final position.
+- Excluding drone_3 from any TDOA calculations in scenes 3+.
+
+The four scenes:
+
+```
+Scene 1 — PATROL + DETECT + LOCALIZE + DECIDE + RESPOND + COMPLETE
+  Drones: all 3.
+  Fix: 3-drone ellipse, low CEP. Action: STRIKE.
+  Outcome: drone_3 lost during strike (scripted).
+
+Scene 2 — DRONE LOST (a single phase: COMPLETE)
+  Visual: drone_3 ☓-marked. Banner: "ASSET LOST · roster reduced 3→2".
+  No new detection. Operator clicks NEXT to continue.
+
+Scene 3 — DETECT + LOCALIZE + DECIDE
+  Drones: 2 (drone_1, drone_2). drone_3 dimmed and ignored.
+  Fix: bearing-only hyperbola + wedge (item 6 math).
+  Action: SEARCH (forced — can't STRIKE a curve).
+
+Scene 4 — RESPOND + COMPLETE
+  Two responders break formation and sweep along the hyperbola wedge.
+  Each takes one half (use ellipse-aware sweep math adapted to a
+  curve: 2 sweep points spaced along the wedge centreline).
+  Outcome: "SEARCH PATTERN ACTIVE — awaiting next event".
+```
+
+Scene transitions don't need elaborate animation; a 500 ms cross-fade
+of the banner is enough. The novelty is the narrative arc itself,
+not the transition graphics.
+
+**Subtasks:**
+
+- 12.1 Tab state shape: `state.tabs[i].scenes[]` instead of a single
+       scenario per tab. Update Session 7's NEXT/PREV logic to bridge
+       scene boundaries.
+- 12.2 Narrative file generator: `triangulation/locate.py
+       --narrative gunfire --out detection/output/narrative_
+       gunfire.json` produces a 4-scene JSON from a hand-crafted
+       events sub-set. (Or hand-write the JSON for the demo.)
+- 12.3 Scene-aware loader: `/api/narratives/<id>` returns the full
+       scene list; the UI loads it once and stores in
+       `state.tabs[NARRATIVE_TAB_ID].scenes`.
+- 12.4 Drone roster rendering: dim drone_3 in scenes 3+ with a ☓
+       overlay; exclude from `state.drones` for phase math; show in
+       legend as "LOST".
+- 12.5 Scene-boundary UI: banner during the inter-scene transition
+       shows `narrative_text` of the next scene. Operator must click
+       NEXT to enter.
+- 12.6 Scene 4 sweep math: for a bearing fix, sweep points are
+       (centre of wedge) ± 0.5 × wedge half-length along the
+       hyperbola tangent. Adapt `policy.search_points` to accept
+       either an ellipse or a wedge.
+- 12.7 Replace tab ① with the narrative tab in the default tab list.
+       Tabs ② – ⑤ remain single-scene presets so the team can still
+       contrast.
+
+**⚠ HUMAN INPUT NEEDED:**
+
+1. Tab label. Suggested `① Gunshot · operational arc` to signal
+   it's the storied one. Confirm.
+2. Drone-loss visualisation. Suggested ☓ overlay + dimmed icon at
+   last-known position. Alternative: full removal from map. Confirm.
+3. Scene-2 duration. With no detection, it's just a banner + log
+   line. Suggested ~3 s auto-advance OR wait-for-NEXT. Probably the
+   latter to let the presenter dwell.
+4. Should drones_used for scene 3 actually start the scene already
+   missing one, or should there be a "drone reposition" phase first?
+   Suggested: start already missing one — keeps the focus on the
+   degradation result, not the bookkeeping.
+
+**Acceptance criteria:**
+
+- Tab `①` shows "scene 1 of 4" in the title strip.
+- ▶ NEXT walks through every phase of every scene and ends after
+  scene 4's `complete`.
+- ⏪ PREV walks back across scene boundaries.
+- Scene 2 visualises drone_3 as LOST.
+- Scene 3 renders a hyperbola + wedge (no ellipse).
+- Scene 3's action chip is SEARCH (blue).
+- Scene 4's responder count is 2, not 3.
+- Other tabs (② – ⑤, sandbox) are unaffected.
+
+---
+
+## Session 13 — Kill-drone button (live resilience)
+
+**Goal:** Persistent UI control to drop any drone from the current
+scene at any time. Triggers a live re-localization with the reduced
+roster. Surfaces the graceful-degradation story as a reactive,
+audience-driven moment rather than a scripted scene. Doubles as the
+implementation that Session 12's scene-2 drone-loss beat invokes.
+
+**Files touched:**
+
+- Modified: `ui/index.html` (kill pills + reset button, kill state,
+  re-render on change)
+- Modified: `triangulation/server.py` (accept `killed` query/body
+  param on all localize/sandbox endpoints)
+- Modified: `triangulation/locate.py` (filter events by killed
+  roster before localizing)
+- Modified: `triangulation/policy.py` (new `INSUFFICIENT_SENSORS`
+  action when < 2 alive drones)
+- Modified: `triangulation/AGENTS.md` (schema additions:
+  `killed_drone_ids`, action enum extension)
+
+**Architecture:**
+
+```
+state.tabs[i].killedDrones : Set<string>     // per-tab kill state
+state.tabs[i].defaultDrones : list<string>   // restored on RESET KILLS
+
+UI fires recompute on every kill/revive:
+
+  /api/scenarios/<id>?sigma_t_ms=X&sigma_pos_m=Y
+                     &killed=drone_2          ← NEW
+
+Backend (locate.localize_scenario):
+  group_filtered = [e for e in group
+                    if e['drone_id'] not in killed_set]
+  remaining = len({e['drone_id'] for e in group_filtered})
+  if remaining >= 3:    use existing 3-drone ellipse fix
+  if remaining == 2:    use Session 11 hyperbola+wedge fix
+  if remaining == 1:    emit {action: "INSUFFICIENT_SENSORS",
+                              fix_kind: "none",
+                              reason: "single-sensor fix not
+                                       available without RSSI mesh"}
+  if remaining == 0:    emit no-fix sentinel; UI shows pure patrol
+```
+
+Switching tabs resets the kill set to that tab's defaults (so a
+kill on `①` doesn't poison `②`). The narrative tab's scene-2 beat
+invokes the kill mechanism programmatically (no separate code path).
+
+**Subtasks:**
+
+- 13.1 Right-rail UI: a row of `💀 drone_<id>` pills (one per drone
+       in the current roster) + a `🔄 RESET KILLS` button. Pills
+       toggle: pressed = killed (red ☓ on the icon).
+- 13.2 Frontend state: `state.tabs[i].killedDrones`. Mirror to the
+       drone-render path: killed drones get the `lost` CSS class
+       (dimmed icon + red ☓ overlay). Excluded from `state.drones`
+       for any phase math.
+- 13.3 Wire kill → `recomputeActiveTab(killed=[...])`. Debounce
+       the same as σ sliders (~120 ms).
+- 13.4 Backend: `localize_scenario` gains a `killed_drone_ids:
+       set[str] | None = None` kwarg. Filters the group before
+       running the math; routes 3 → 3-drone, 2 → 2-drone (Session
+       11), <2 → graceful no-fix.
+- 13.5 Flask endpoint changes: parse `killed=a,b,c` from query
+       string into a set; pass through.
+- 13.6 `policy.decide()`: add `INSUFFICIENT_SENSORS` to the Action
+       enum; returns when `fix_kind == "none"`. Severity = "low",
+       weapons_release_required = false.
+- 13.7 New action chip colour for INSUFFICIENT_SENSORS (suggested
+       `--insufficient: #6a737d` slate-grey).
+- 13.8 UI banner when `INSUFFICIENT_SENSORS`: "SENSOR LOSS — fix
+       unavailable · expanding patrol".
+- 13.9 Tab-switch reset: when `setActiveTab(j)` runs, clear
+       `state.tabs[j].killedDrones` to defaults. (Don't touch
+       OTHER tabs' kill sets — they may be mid-demo too.)
+- 13.10 Keyboard shortcut: `k` cycles through drones to kill the
+       next live one. Useful for fast presenter input.
+
+**Considerations:**
+
+- **💡 NOTE: kill is pure UI state.** events.json on disk is never
+  modified. Each render call passes the killed set explicitly to
+  the backend.
+- **💡 NOTE: works in every tab, including sandbox.** In sandbox,
+  a killed drone stays at its dragged position with ☓ overlay; it
+  just doesn't contribute to the math.
+- **💡 NOTE: Session 12 reuses this.** Scene 2's drone-loss beat is
+  just a programmed kill call at scene start. No parallel code
+  path for "scripted" vs "ad-hoc" loss.
+- **💡 NOTE: revival is instant.** Click the pill again to revive;
+  fix re-tightens within ~120 ms.
+- **⚠ Edge case: σ sliders + kill must not race.** Both fire fetches
+  on change. Use a single async function `recomputeActiveTab()` that
+  reads both states at the moment of fetch and last-fetch-wins.
+
+**⚠ HUMAN INPUT NEEDED:**
+
+1. Button placement. Right-rail pill row (suggested) vs top-bar
+   dropdown (more screen real estate). Confirm.
+2. Should kill state persist across browser refresh? Suggested
+   **no** — each demo starts clean.
+3. Audio cue on kill? Suggested **no** — competes with scenario
+   sounds.
+4. Keyboard shortcut for the kill cycle. Suggested `k` (mnemonic).
+   Confirm.
+
+**Acceptance criteria:**
+
+- Kill `drone_2` in a 3-drone scenario → ellipse collapses to
+  hyperbola+wedge (Session 11) within ~200 ms; action chip flips
+  from STRIKE/RECON to SEARCH live.
+- Kill `drone_2` + `drone_3` → action chip becomes
+  INSUFFICIENT_SENSORS; banner appears; no fix is drawn.
+- `🔄 RESET KILLS` → all drones restored; original fix returns
+  within ~200 ms.
+- Tab switch resets kills for the target tab to that tab's defaults.
+- Works in the sandbox tab (drag remaining drones, see hyperbola
+  follow the geometry).
+- Session 12 scene 2 transitions invoke this mechanism rather
+  than duplicating logic.
+
+### Add audio — atmospheric rotor loop + event sound cues
+
+*Not a numbered session — sprinkled into whatever UI work is happening
+that day. Adds ~1.5 h total. Hooks into the phase machine from
+Session 7. Can ship at any point after Session 7 lands.*
+
+**Goal:** make the demo feel like a sound-detection system by
+actually playing sound. Two layers:
+
+1. **Atmospheric rotor loop.** Drone rotor WAV looping in the
+   background while drones are on screen. OFF by default (it's
+   annoying after 30 s of pitch); toggle pill in the top bar.
+2. **Event audio cues.** When a scenario reaches DETECT phase, the
+   classified sound plays — gunshot for `label=="gunshot"`, tank
+   engine for `"tank"`, etc. Timed to land **0.5 s before** the
+   target dot appears in LOCALIZE, so the audience hears the event
+   first, then sees the system register it.
+
+**Files touched:**
+
+- Modified: `ui/index.html` (audio elements, phase-hook trigger,
+  rotor toggle pill)
+- Modified: `triangulation/server.py` (one new static route to
+  serve `data/samples/` so the browser can fetch the WAVs)
+
+**Architecture:**
+
+```
+ui/index.html
+  AUDIO = { rotor, gunshot, tank, missile_launch, drone }
+    each one a new Audio(src)
+  AUDIO.rotor.loop = true
+  AUDIO.rotor.volume = 0.25
+  for each event sound: volume = 0.75
+
+  Phase machine hook (in tickPlayback):
+    on DETECT phase, when progress crosses (dur - 500ms) / dur:
+       play AUDIO[entry.label] from currentTime = 0
+       (fires exactly 500 ms before LOCALIZE phase starts)
+
+  Top bar: <button id="rotor-toggle">🔊 ROTOR · off</button>
+    click: AUDIO.rotor.play() / pause(); toggle label
+
+triangulation/server.py
+  Add a single Flask route:
+    @app.route("/audio/<path:rel>")
+    def serve_audio(rel):
+        return send_from_directory(REPO_ROOT / "data/samples", rel)
+  Browser URLs: /audio/gunshot/demo_gunshot_128293.wav, etc.
+```
+
+**Tasks:**
+
+- A.1 In `triangulation/server.py`, add the `/audio/<path:rel>`
+      route serving `data/samples/`.
+- A.2 In `ui/index.html`, declare an `AUDIO` map keyed by event
+      label, each value a `new Audio("/audio/<path>")` preloaded
+      with `preload="auto"`. Map labels:
+      `gunshot → demo_gunshot_128293.wav`,
+      `tank → 169743__qubodup__m1-abrams-tank-engine-and-shots-wombzerncci.flac`
+      (or the shorter `dennish18-tank-moving-143104.mp3`),
+      `missile_launch → ucas_launch_x47b_qubodup.flac`,
+      `drone → uas_drone_pass_dcpoke.wav` (rotor loop).
+- A.3 Hook the phase machine: in `tickPlayback`'s DETECT branch,
+      track whether the event audio has fired for the current
+      phase entry (avoid double-fire). Fire when
+      `phaseT >= (PHASE_MS.detect - 500)`. Reset the fired flag on
+      phase advance.
+- A.4 Top-bar rotor toggle. State stored in
+      `state.rotorEnabled: bool`, default `false`. Click handler
+      toggles state, plays/pauses `AUDIO.rotor`, updates button
+      label `🔊 ROTOR · on` / `🔇 ROTOR · off`.
+- A.5 Mute-all keyboard shortcut: `m` toggles a master mute that
+      pauses all sounds. Useful for the presenter if a phone rings.
+- A.6 Kill-drone interaction (Session 13): when ALL drones killed,
+      auto-pause the rotor (no drones → no rotor sound). When any
+      drone revived, resume if `rotorEnabled` is true.
+
+**Considerations:**
+
+- **💡 NOTE: browser autoplay policy.** Audio cannot play until the
+  user clicks something. The first ▶ NEXT click counts. No special
+  handling required; first audio just plays from then on.
+- **💡 NOTE: file paths via Flask, not relative.** The UI is served
+  by Flask anyway (Session 8); use absolute `/audio/...` URLs.
+- **💡 NOTE: scene-2 of the narrative tab (drone lost).** If you
+  want a "drone lost" sound effect for the narrative arc, add a
+  short static / explosion WAV under a new label like
+  `drone_lost`. Optional — silence works fine too.
+- **💡 NOTE: rotor loop must be seamless.** Some WAVs have a click
+  at the loop boundary. If you hear it, trim the WAV with
+  `ffmpeg -i in.wav -t 4 -af afade=t=out:st=3.9:d=0.1 out.wav` to
+  fade out the last 100 ms cleanly.
+- **⚠ Multi-event overlap.** Clicking NEXT fast can fire two event
+  WAVs simultaneously. Acceptable — it actually reads as realistic.
+  But if you want to enforce one-at-a-time: pause the previous
+  event audio before playing the new one.
+- **⚠ Sandbox tab.** Sandbox has no scenarios advancing through
+  phases, so it has no DETECT phase to hook into. Skip event audio
+  in sandbox. Rotor still works if enabled.
+
+**⚠ HUMAN INPUT NEEDED:**
+
+1. Rotor default: off (suggested) vs on. Confirm off.
+2. Volume balance: rotor `0.25`, events `0.75`. Confirm.
+3. Lead time before LOCALIZE: 500 ms (suggested). Could be 300 ms
+   or 800 ms — confirm what feels right.
+4. Tank WAV: short loop (`dennish18-tank-moving-143104.mp3`, ~3 s)
+   or longer atmospheric (`169743__qubodup`, ~30 s)? Suggested
+   the short one — fires once per scenario, doesn't drag.
+5. Mute-all keyboard shortcut on `m`? Confirm.
+
+**Acceptance criteria:**
+
+- Rotor toggle pill in the top bar; clicking it plays/pauses a
+  looped drone WAV at `0.25` volume.
+- Default state on page load: rotor OFF.
+- When a scenario reaches DETECT phase and crosses the
+  `(dur - 500ms)` mark, the matching event WAV plays once at
+  `0.75` volume.
+- LOCALIZE phase starts ~500 ms later; dot appears.
+- Mute-all key (`m`) silences everything; press again to restore.
+- Sandbox tab: rotor works; no event audio (no phases).
+- Kill all drones → rotor auto-pauses (until revival).
+
+---
+
+## Bridge specifications (referenced above)
+
+These are short specs for the bridge sessions referenced in items
+17, 22, 24, 27. They're not in any other doc — included here so the
+plan is self-contained.
+
+### Bridge: Recon imagery actually traverses the mesh (item 22)
+
+**Files:** `ui/index.html`, `triangulation/server.py`,
+`mesh/imagery.py`.
+
+**Change:** in Session 4's telemetry handler, when the RECON action
+hits the `IMAGING NOW` beat, instead of `popup.show()`, the UI:
+
+1. `POST /api/recon-imagery` with `{scenario_id}`.
+2. Open SSE to `/api/recon-imagery/stream/<id>`.
+3. Render the image incrementally as chunks arrive.
+4. On SSE close: log "imagery complete via mesh".
+5. On 5 s timeout without first chunk: show the static placeholder
+   so the demo never appears broken.
+
+**Acceptance:** the recon popup that used to appear instantly now
+animates a progress bar from 0% to 100% as the mesh delivers chunks.
+First-thumb under 250 ms in sim.
+
+### Bridge: Mesh-NTP corrects acoustic timestamps (item 24)
+
+**Files:** `triangulation/core/io.py`, new
+`triangulation/clock.py`, `triangulation/server.py`.
+
+**Change:** `core/io.relative_times` gains an optional
+`clock_offsets: dict[drone_id, ns] | None = None` argument. When
+provided, it adds the offset to each event's timestamp before
+differencing. `triangulation/clock.py` exposes
+`register_mesh(node)` and `get_offsets()`. The Flask server, when
+mesh-aware mode is enabled (env `MESH_MODE=1`), registers the
+mesh node at startup and passes `get_offsets()` to every localize
+call.
+
+**Acceptance:** with mesh on, injecting 1 ms drift on a drone
+keeps CEP50 within 5% of un-drifted; with mesh off, CEP50 visibly
+blows up.
+
+### Bridge: Demo orchestrator (item 17)
+
+**Files:** new `scripts/demo.py`, README update.
+
+**Change:** `scripts/demo.py` reads `mesh/topology.yaml`, spawns
+`python -m mesh.node --id <id>` for each drone + `python -m
+triangulation.server` for the operator backend, polls the server
+port, opens the browser. Ctrl-C SIGTERMs all children and waits.
+
+**Acceptance:** `./scripts/demo.sh` brings up everything, opens
+the browser, Ctrl-C cleans up, no zombie processes.
+
+### Bridge: Mesh events in the operator event log (item 19)
+
+**Files:** `ui/index.html`, `mesh/operator.py`,
+`triangulation/server.py`.
+
+**Change:** existing `#eventLog` in the UI now also displays
+mesh events (route changes, NTP convergence, frame counts) with a
+distinct `.entry.mesh` CSS class (cyan tint). Source is a polled
+`/api/mesh/events?since=<ts>` endpoint.
+
+**Acceptance:** running the demo, the event log interleaves
+acoustic telemetry (red/amber) and mesh telemetry (cyan).
+"BLOCK drone_2" in the UI produces a `[ROUTE]` line in the log
+within 500 ms.
+
+### Bridge: ROE aware of mesh health (item 27)
+
+**Files:** `triangulation/policy.py`, `triangulation/server.py`.
+
+**Change:** `policy.decide(...)` gains kwargs `mesh_health_score:
+float = 1.0`, `clock_sync_quality_us: float = 0`. When the score
+drops below 0.9 OR `clock_sync_quality_us > 100`, the action chip
+drops one tier. UI shows a "mesh health" pill next to the chip.
+
+**Acceptance:** triggering "BLOCK drone_2" causes the active tab's
+ROE action to visibly downgrade (STRIKE → RECON, or RECON →
+SEARCH) within one polling tick.
+
+---
+
+## Time budget at a glance
+
+| Tier | Sessions | Hours |
+|---|---|---|
+| Tier 1 — Essential | 1–13 | ≈ 43 h |
+| Tier 2 — Strong (mesh) | 14–24 | ≈ 27 h |
+| Tier 3 — Nice to have | 25–28 | ≈ 17 h |
+
+If you have **≤ 43 h**: ship Tier 1, done. Demo is complete,
+operator-paced, every phase visually self-explanatory, includes the
+narrative arc, has the sandbox, lets you live-kill drones, contrasts
+threat vs ambient classification, ships with the bandwidth-budget
+slide, has a permanent live bandwidth side panel showing the
+mesh compression numbers, AND has a fully reactive Live Ops tab
+where events are dropped on the map and the system responds in
+real time.
+
+If you have **43–70 h**: Tier 1 + Tier 2. Full integrated demo with
+a working mesh underneath everything, including the toggleable
+packet-flight FX animation.
+
+If you have **70+ h**: pick from Tier 3, hardware bring-up first if
+anyone on the team is signed up for it.
+
+## Repository layout after all of Tier 1 + Tier 2
+
+```
+Junction_Defence_Hackathon/
+├── triangulation/
+│   ├── core/
+│   │   ├── io.py, solver.py, uncertainty.py
+│   │   └── solver_2drone.py        ← new (item 6)
+│   ├── locate.py, policy.py, projection.py
+│   ├── viewer.py, sandbox.py       (sandbox: item 4)
+│   ├── server.py                   ← new (item 3)
+│   ├── clock.py                    ← new (item 18 bridge)
+│   ├── jam.py
+│   └── tests/
+├── mesh/                           ← new (items 9–17)
+│   ├── transport/{base.py, sim.py, real.py?}
+│   ├── frame.py, security.py
+│   ├── routing.py, priority.py
+│   ├── ntp.py, imagery.py
+│   ├── operator.py, node.py
+│   ├── topology.yaml
+│   └── tests/
+├── ui/index.html                   (tabs + sliders + sandbox + narrative + mesh panel)
+├── scripts/demo.py                 ← new (item 12 bridge)
+├── docs/MESH_ARCHITECTURE.md       (Session 6, item 8)
+├── detection/output/
+│   ├── events.json
+│   ├── localizations.json
+│   ├── localizations_jammed.json
+│   └── narrative_gunfire.json      ← new (item 7)
+├── SESSIONS.md, SESSIONS_INTERACTIVE.md, MESH_PLAN.md
+└── ROADMAP.md                      ← this file
+```
+
+## Decision checklist before starting
+
+Before kicking off the next Sonnet session, confirm:
+
+1. **Hours remaining?** Determines which tiers you build.
+2. **Sim-only at the venue, or hardware in scope?** If sim-only,
+   skip item 22.
+3. **Pitch length?** 60 s / 2 min / 5 min — affects how many tabs +
+   scenes you can showcase. (The narrative tab alone fills ~90 s.)
+
+Once those are answered, follow the numbered list above. Don't
+skip ahead within a tier — each item ends with the demo strictly
+better, not half-broken.
+
+---
+
+## Session 14 — Source icon + acoustic emission visuals
+
+**Goal:** Replace the current "drones spontaneously light up from
+nothing" visual with a coherent cause→effect chain. At DETECT phase
+start, a small classifier-coloured icon (rifle / tank / missile /
+bird) appears at the true source position, blinks, and emits
+concentric "sound wave" rings outward. Drone-light-up timing ties to
+ring-arrival timing. At LOCALIZE, rings stop; cloud fades in *around*
+where the system thinks the source is — the gap between the visible
+icon position and the cloud center is the visible localization
+error. Includes a phase-narration subtitle bar at the bottom of the
+map so the presenter doesn't have to narrate every beat.
+
+**Files touched:**
+
+- Modified: `ui/index.html` only
+
+**Architecture:**
+
+Three new visual layers stack on top of the existing entity layer:
+
+```
+existing render path (top → bottom):
+   entity-layer (DOM)  : drones, target dots
+   pulse layer (canvas): existing emitPulse() rings
+   cloud layer (canvas): 95% confidence cloud
+   terrain layer       : forest, grid
+
+new additions:
+   source-icon (DOM, entity-layer): classifier-coloured icon at true
+                                     source position; spawned on
+                                     DETECT, persists thereafter.
+                                     Blink animation during DETECT.
+   acoustic emission (canvas)     : concentric rings emanating from
+                                     source position; emitted every
+                                     ~200 ms during DETECT; expand
+                                     to ~viewport radius over 1.5 s
+                                     while stroke fades to 0.
+   phase subtitle (DOM, footer)   : one line of plain English
+                                     describing what's happening now.
+```
+
+Classification colour map (single source of truth):
+
+```js
+const CLASS_COLOR = {
+  // threat
+  gunshot:       '#e85c4a',   // existing --hostile red
+  tank:          '#e85c4a',
+  missile_launch:'#e85c4a',
+  drone_hostile: '#e8a838',   // amber — hostile but lower severity
+  // ambient (Session 15)
+  bird:          '#4fd87a',   // existing --accent green
+  dog:           '#4fd87a',
+  crickets:      '#4fd87a',
+  deer:          '#4fd87a',
+  // unknown
+  unknown:       '#e8a838',   // amber
+};
+```
+
+Phase-by-phase responsibilities:
+
+| Phase | Source icon | Rings | Cloud | Subtitle |
+|---|---|---|---|---|
+| PATROL | hidden | none | none | "Drones holding formation" |
+| DETECT | spawn, blink | emit every 200 ms | none | "Acoustic signature detected by N sensors" |
+| LOCALIZE | steady, no blink | stop, fade | fade in | "Triangulating source — CEP50 reducing" |
+| DECIDE | pulse with action colour | none | held | "ROE evaluated — STRIKE / RECON / SEARCH / MONITOR" |
+| RESPOND | held | none | held | "Responder dispatched / Sweep underway / …" |
+| COMPLETE | held (or "neutralized" for STRIKE) | none | held | "Target neutralized / Recon complete / Sector cleared" |
+
+**Subtasks:**
+
+- 14.1 Icon library additions in the existing `ICONS` map for the
+       new labels needed by Session 15: `bird` (small avian
+       silhouette), `dog`, `crickets` (small dotted glyph), `deer`
+       (antlers silhouette). Reuse existing styling.
+- 14.2 New entity type `source` rendered through the existing
+       `upsertEntity()` path. Position from
+       `entry.source.{lat,lon}` (production tabs) or true source
+       (sandbox / narrative scene with scripted truth).
+- 14.3 CSS `@keyframes blink-source { 0%, 100% { opacity: 1.0;
+       transform: scale(1.0) } 50% { opacity: 0.7; transform:
+       scale(1.08) } }` — 0.5 s period, applied via `.source.blink`
+       class. Removed at LOCALIZE start.
+- 14.4 Phase hook in `tickPlayback`'s DETECT branch: at progress = 0,
+       spawn source entity + start blink. Every ~200 ms thereafter
+       (track via `pb.lastRingEmit`), call `emitPulse(sourceX,
+       sourceY, color)` using the existing canvas pulse machinery
+       — just call it from the source instead of from drones.
+- 14.5 Tune ring expansion in `drawPulses` so a ring reaches the
+       furthest drone at roughly DETECT-end. (Current animation
+       constants probably need a small tweak — verify with the
+       triangle preset.)
+- 14.6 Tie drone-light-up to ring-arrival: instead of lighting all
+       drones simultaneously at DETECT start, light each drone the
+       moment its distance from source matches the leading-ring
+       radius. Smooth fade-up over ~120 ms.
+- 14.7 Phase subtitle DOM: new `<div class="phase-subtitle">` inside
+       the existing `.map-wrap`, bottom-centred. Updated by a
+       `PHASE_SUBTITLE` lookup keyed on `(phase, action)`.
+- 14.8 Action-classification pulse on the source icon during DECIDE:
+       brief colour flash matching the recommended action.
+- 14.9 RESPOND outcome handling on the source icon:
+       - STRIKE: at impact (RESPOND progress ≈ 0.9), source icon
+         gets a "neutralized" overlay (red ☓ + 50 % opacity)
+       - RECON: small camera-icon badge appears next to source
+       - SEARCH: source dims slightly to suggest "still under
+         investigation"
+       - MONITOR (Session 15): no change; icon stays as-is
+       - HOLD: no responder, no change
+- 14.10 Z-order: source icon ABOVE drones ABOVE cloud ABOVE rings
+        ABOVE terrain. Verify rendering order in `renderEntities()`.
+
+**Considerations:**
+
+- **💡 NOTE: source icon shows the DETECTED label, not true type.**
+  Even when the system misclassifies (a deer flagged as "gunshot"),
+  the icon shows the *classifier's* output. In sandbox, the icon
+  shows the true type the user selected. In narrative tab scenes,
+  the icon shows the scripted label.
+- **💡 NOTE: rings emit from source, not from each drone.** Sound
+  physically radiates from the source. Existing
+  `emitPulse(droneX, droneY)` calls in the DETECT path can be
+  removed or kept as "drone hears" secondary visuals — your call.
+  Cleaner to remove and let the source-emitted rings be the only
+  rings during DETECT.
+- **💡 NOTE: cloud center vs icon position is the *visible
+  error*.** This is the educational moment: judges see exactly how
+  off the system is. Don't try to "snap" the cloud to the icon —
+  the gap is the point.
+- **💡 NOTE: subtitle bar is content-driven, not narration.** Use
+  data from the scenario (drone count, action, CEP50) to fill in
+  blanks: `"Acoustic signature detected by {N} sensors"` where N
+  is the current alive count. Reads as a real system console.
+- **⚠ Performance.** Ring emission every 200 ms × 1.5 s lifetime =
+  up to ~8 rings concurrent. Plus existing sonar pulses. Should be
+  fine on a modern laptop but worth a frame-rate check on the demo
+  machine. Cap to 12 concurrent pulses if needed.
+
+**⚠ HUMAN INPUT NEEDED:**
+
+1. Ring emission rate (suggested 200 ms). Faster (100 ms) feels more
+   urgent; slower (400 ms) feels more deliberate. Confirm.
+2. Ring expansion duration (suggested 1.5 s). Tied to DETECT phase
+   length (currently 1500 ms) so they align. Confirm if DETECT
+   duration changes.
+3. STRIKE outcome visual: red ☓ overlay (suggested) vs fade-to-grey
+   vs explosion icon. Confirm.
+4. Subtitle styling: monospace JetBrains Mono (existing pitch font)
+   at ~14 px, dim accent colour. Confirm or tweak.
+
+**Acceptance criteria:**
+
+- PATROL phase: source icon hidden; no rings; subtitle says "Drones
+  holding formation".
+- DETECT phase start: source icon spawns at true position with
+  classifier-coloured blink; rings begin emitting every 200 ms.
+- Drone lights now match ring-arrival timing (visibly sequential,
+  not simultaneous).
+- LOCALIZE phase start: rings stop expanding (existing ones fade
+  out); cloud begins fading in; source icon stops blinking.
+- Gap between source icon position and cloud center is visibly
+  the localization error.
+- DECIDE phase: source icon pulses once in the action colour.
+- RESPOND phase:
+  - STRIKE → red ☓ overlay on source at progress ≈ 0.9
+  - RECON → camera-icon badge appears
+  - SEARCH → source dims
+- Phase subtitle updates at every phase change with content-driven
+  text.
+- 60 fps maintained throughout (check `statFps`).
+
+---
+
+---
+
+## Session 15 — Ambient (wildlife) triangulation tab
+
+**Goal:** A dedicated tab `🐺 Wildlife · ambient` runs a bird /
+crickets / dog scenario through the same pipeline as a threat, with
+all green visuals and a new `MONITOR` action chip. Demonstrates
+discriminative classification: the system localizes everything it
+hears but only engages the right things.
+
+**Files touched:**
+
+- Modified: `triangulation/policy.py` (new MONITOR action,
+  AMBIENT_LABELS constant)
+- Modified: `triangulation/locate.py` (allow ambient via flag)
+- Modified: `triangulation/AGENTS.md` (schema additions)
+- Modified: `ui/index.html` (new tab, ambient color path)
+
+**Architecture:**
+
+Backend changes:
+
+```
+triangulation/policy.py:
+  AMBIENT_LABELS = ("bird", "dog", "crickets", "deer")
+
+  decide(cep50, gdop, label, confidence) -> Decision:
+      # existing branches: HOLD, STRIKE, RECON, SEARCH
+      if label in AMBIENT_LABELS:
+          return Decision(action="MONITOR",
+                          reason=f"{label} classified as ambient — "
+                                 "non-threat",
+                          severity="low",
+                          weapons_release_required=False)
+
+triangulation/locate.py:
+  localize_scenario(..., triangulate_ambient=False):
+      if all(e['relevant'] is False) and not triangulate_ambient:
+          skip (existing behavior)
+      if all(e['relevant'] is False) and triangulate_ambient:
+          if label in AMBIENT_LABELS:
+              localize as usual; output['classification'] = 'ambient'
+          else:
+              skip ('relevant=false' but not a recognised ambient)
+
+  CLI flag: --ambient   (when set, processes ambient scenarios too)
+```
+
+New JSON field:
+
+```
+classification : "threat" | "ambient"      ← NEW
+```
+
+`threat_priority` for ambient = 0 (never competes with threats in
+the priority stack).
+
+Frontend:
+
+- One of the 6 tabs is repurposed (or a 7th added):
+  `🐺 Wildlife · ambient` with a bird/crickets/dog scenario loaded.
+- All Session 14 visuals apply with green colour (bird/dog/crickets/
+  deer all map to green in `CLASS_COLOR`).
+- Action chip shows "MONITOR" in green.
+- RESPOND phase is **skipped** (no engagement). After DECIDE, skip
+  to COMPLETE. (Or run RESPOND with zero responders, just a
+  subtitle "No engagement — logged.")
+- Animal icon persists on the map after the scenario completes (a
+  logged observation).
+- Bird WAV plays during DETECT (already wired by the audio addon
+  if `entry.label == "bird"` matches `AUDIO["bird"]`).
+
+**Subtasks:**
+
+- 15.1 `AMBIENT_LABELS` constant and `MONITOR` action in
+       `policy.py`. Distinct chip colour:
+       `--monitor: #4fd87a` (green; reuses --accent).
+- 15.2 `decide()` returns MONITOR for any label in AMBIENT_LABELS,
+       regardless of CEP/GDOP (a confident ambient is still
+       ambient).
+- 15.3 `_localizable()` in `locate.py` accepts a `triangulate_ambient`
+       flag. When True, scenarios with `relevant: False` AND
+       `label in AMBIENT_LABELS` are localised; others still
+       skipped.
+- 15.4 New JSON field `classification` ∈ {"threat", "ambient"}.
+- 15.5 CLI flag `--ambient` on `python -m triangulation.locate`.
+- 15.6 Add wildlife scenario data: pick `scenario_bird_mix.wav`
+       from existing `events.json`. (May need to set
+       `label: "bird"` on its rows; the input currently has
+       `label: null`. One-line edit to events.json.)
+- 15.7 Re-run pipeline with `--ambient` to populate
+       `localizations.json` with at least one ambient entry.
+- 15.8 Frontend tab: `🐺 Wildlife · ambient`. Loads the ambient
+       entry. Uses Session 14's render path with green
+       `CLASS_COLOR` for `label == "bird"` etc.
+- 15.9 Action chip styling: green pill for MONITOR, label
+       `"MONITOR · ambient signal"`.
+- 15.10 RESPOND phase handling: skip outright or run-with-no-
+        responders. Suggested: skip and jump to COMPLETE.
+        Subtitle says "No engagement — observation logged."
+- 15.11 Icon persistence: animal icon stays visible after COMPLETE
+        (same as threat icon, but no neutralized overlay).
+- 15.12 Audio: confirm bird WAV plays during DETECT. Tank/missile
+        WAVs should NOT fire for ambient scenarios (different
+        label).
+- 15.13 Document: AGENTS.md schema additions for `classification`
+        and the new MONITOR action.
+
+**Considerations:**
+
+- **💡 NOTE: don't auto-show ambient in OTHER tabs' backgrounds.**
+  The temptation to "always render ambient detections faintly in
+  every tab" is real and wrong. Clutters every other demo. Ambient
+  belongs in its own tab so it gets attention when it's the focus
+  and gets out of the way when it isn't.
+- **💡 NOTE: MONITOR is operationally distinct from HOLD.** HOLD
+  means "low confidence, can't act"; MONITOR means "high
+  confidence, deliberate non-engagement". Different chip colour,
+  different language.
+- **💡 NOTE: classifier isn't real.** The "bird" label in the JSON
+  comes from a CSV-style hardcoded classifier upstream, not an ML
+  model. The pitch should be honest: we *display* the
+  classification result; we don't *build* the classifier here.
+  Add this caveat to the slide if a judge asks.
+- **💡 NOTE: ambient scenarios still produce a green cloud.** It's
+  tempting to skip the cloud ("we know it's a bird, why localize
+  it?"). Render the cloud anyway — it shows that the system *did*
+  the math and chose not to engage. That's the entire point.
+- **⚠ The events.json bird scenarios have `relevant: false` and
+  `label: null`.** Session 15 needs them to have `label: "bird"`
+  (etc.) at minimum. Either patch the events.json directly or
+  teach `_localizable` to infer the label from the scenario path
+  (`scenario_bird_*` → `bird`). The path-inference approach is
+  cleaner (no data edit) but adds magic.
+
+**⚠ HUMAN INPUT NEEDED:**
+
+1. Which animal scenario to feature? Suggested **bird** — most
+   distinct from threat sounds aurally. Alternatives: dog
+   (richer audio), crickets (more "ambient" feel).
+2. Path-inference vs events.json edit for the label? Suggested
+   **events.json edit** (one-line change, no hidden magic).
+3. RESPOND phase: skip outright (suggested) or play with zero
+   responders + "no engagement" subtitle? Both are valid.
+4. Should ambient detections also have their own `cloud_format`
+   default? Suggested: same as threat (ellipse, 95%).
+
+**Acceptance criteria:**
+
+- `python -m triangulation.locate --ambient` writes
+  `localizations.json` with at least one entry where
+  `classification == "ambient"` and `recommended_action ==
+  "MONITOR"`.
+- `🐺 Wildlife · ambient` tab is selectable in the UI.
+- All visuals (source icon, rings, cloud, chip) are green.
+- Action chip text reads "MONITOR · ambient signal".
+- RESPOND phase is either skipped or shows no responder
+  animation.
+- Bird WAV plays during DETECT (audio addon already wired).
+- After COMPLETE, the animal icon stays on the map.
+- Switching to a threat tab and back to ambient correctly
+  re-renders everything green.
+
+---
+
+---
+
+## Session 16 — Mesh bandwidth side panel
+
+**Goal:** Permanent top-bar strip showing live mesh bandwidth
+telemetry, with click-to-inspect hex dump for the engineer-judge.
+Surfaces the compression work in `mesh/` so the bandwidth
+efficiency story is visible during the pitch instead of hidden in
+a benchmark CLI.
+
+**Files touched:**
+
+- New: `triangulation/server.py` adds `/api/mesh/bandwidth` endpoint
+  (wraps `mesh.metrics.get_metrics().summary()` and adds per-event
+  hex dumps from `mesh.payload`)
+- Modified: `ui/index.html` (top-bar strip + popover)
+- Modified: `mesh/publish.py` or new `mesh/live_publisher.py` —
+  small helper to fire a single tactical event from a live UI
+  trigger and return the metrics delta
+
+**Architecture:**
+
+```
+ui/index.html (top bar)
+   │
+   │ 1 s polling
+   ▼
+   GET /api/mesh/bandwidth
+   │
+   ▼
+   triangulation/server.py
+   │
+   ├── on first call: load events.json + localizations.json,
+   │   pre-compute per-row tactical and per-entry loc-summary
+   │   sizes via mesh.payload.event_row_to_tactical / pack_loc_summary
+   │
+   ├── on scenario tab activation: bump running totals
+   │   (the UI sends a hint when active scenario changes)
+   │
+   └── return {
+         total_mesh_bytes: int,
+         total_json_bytes: int,
+         saved_bytes: int,
+         saved_pct: float,
+         last_packet: {
+           kind: "tactical" | "loc_summary",
+           bytes_mesh: int,
+           bytes_json: int,
+           hex_mesh: "e0 01 01 02 …",
+           hex_json: "{\"label\":\"gunshot\",…}",
+         },
+         extrapolation: { events_per_hour: 1000, kb_per_day_mesh: 3, kb_per_day_json: 38 }
+       }
+```
+
+Top-bar layout (matches existing JetBrains Mono tactical style):
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│ MESH 64 B   /   JSON 392 B   /   SAVED 84%        ⓘ click   │
+│ TOTAL 2.4 KB sent · 28 KB saved · est 26 MB/day              │
+└──────────────────────────────────────────────────────────────┘
+```
+
+Click anywhere on the strip → popover with side-by-side hex/JSON
+dump and a small bar-chart of cumulative savings over the pitch.
+
+**Subtasks:**
+
+- 16.1 Backend: `/api/mesh/bandwidth` endpoint. Reads
+       `detection/output/events.json` and `localizations.json` once
+       at startup, computes per-row tactical sizes and per-entry
+       loc-summary sizes via the existing `mesh.payload` helpers.
+- 16.2 UI session state tracks "totals so far" — accumulates on each
+       scenario tab activation, never resets unless presenter hits
+       a "↺ reset bandwidth counters" button.
+- 16.3 Frontend top-bar strip: monospace, two lines, click → popover.
+- 16.4 Popover: side-by-side hex dump (left = mesh, right = JSON),
+       small bar chart underneath showing cumulative bytes over time.
+- 16.5 Extrapolation footer text — formula `events/hour × per-event
+       saving × 24`, displayed as "est 26 MB/day per swarm at scale".
+- 16.6 Reset button (for rehearsals). Bottom-right of the popover.
+- 16.7 Performance: poll endpoint at 1 Hz, not faster. The number
+       shouldn't update mid-narration.
+
+**Considerations:**
+
+- **💡 NOTE: this panel is read-only.** It only displays what
+  `mesh.metrics` and `mesh.payload` already produce. Don't
+  re-implement the compression in JS — fetch numbers from Python.
+- **💡 NOTE: per-scenario delta vs running total.** Showing both is
+  the right call: per-scenario for the immediate event, total for
+  cumulative impact. Don't only show one.
+- **💡 NOTE: extrapolation is a *talking point*, not a measured
+  number.** The "26 MB/day at scale" line is calculated from
+  assumed events/hour. Caveat it in the popover footer: "extrapolated
+  at 1000 events/hour, your mileage may vary".
+- **⚠ Don't update faster than 1 Hz.** Animation noise distracts
+  from the main map. Bandwidth numbers are calm and authoritative,
+  not flashing.
+
+**⚠ HUMAN INPUT NEEDED:**
+
+1. Extrapolation rate: 1000 events/hour suggested. Confirm or
+   override (defense-realistic might be 50–200/hour during active
+   engagement).
+2. Top-bar strip placement: above the existing header (suggested)
+   vs below it. Confirm.
+3. Reset button visible always vs only in popover? Suggested
+   only in popover (presenter doesn't accidentally reset mid-pitch).
+
+**Acceptance criteria:**
+
+- `/api/mesh/bandwidth` returns correct per-event tactical size
+  (32 B + 32 B frame = 64 B on wire) and per-loc summary size
+  (24 B + 32 B frame = 56 B on wire).
+- Top-bar strip renders the live numbers in the tactical theme.
+- Click → popover shows correct side-by-side hex dump from
+  `mesh.payload`.
+- Reset button zeroes the totals without breaking the page.
+- Page still 60 fps with the panel polling every 1 s.
+
+---
+
+---
+
+## Session 17 — Packet flight FX (toggleable)
+
+**Goal:** Toggleable atmospheric polish on top of Session 18's mesh
+topology panel. When `BANDWIDTH FX: on` in the top bar, every mesh
+transmission spawns a small coloured capsule that travels along
+the relevant edge in the topology view over ~400 ms. Capsule
+colour by payload kind, width ∝ byte count, hover → tooltip with
+packet details. Default **off** — turn on when narrating the mesh,
+off otherwise.
+
+**Files touched:**
+
+- Modified: `ui/index.html` (toggle, animation system, hover tooltip)
+- Modified: `triangulation/server.py` (add SSE `/api/mesh/events`
+  stream — or extend the existing polling endpoint with a
+  recent-events tail)
+
+**Architecture:**
+
+```
+state.bandwidthFx : bool        // top-bar toggle
+state.flyingCapsules : list     // active animations, each:
+  { src_node, dst_node, kind, bytes, t, color, started_ms }
+
+Animation loop:
+   each frame:
+     for each capsule c:
+       c.t += dt / 400ms
+       if c.t >= 1:    remove from list
+       else:           lerp position along edge(src, dst)
+                        draw rect of width ∝ bytes, color ∝ kind
+
+Event source:
+  GET /api/mesh/events?since=<ts>   (polled at 200 ms)
+  → [{src_id, dst_id, kind, bytes, ts}, ...]
+
+  When received and state.bandwidthFx == true:
+    push each event onto state.flyingCapsules
+```
+
+Visual style:
+
+| Kind | Colour | Width per byte | Note |
+|---|---|---|---|
+| tactical (32 B) | green `#4fd87a` | small dot (~2 px/B) | acoustic detection event |
+| loc_summary (24 B) | blue `#4faec8` | small dot | localization fix |
+| frame overhead (HMAC, 16 B) | purple fringe | thin trailing edge | shown as glow trail |
+
+**Subtasks:**
+
+- 17.1 Top-bar toggle pill `🔁 BANDWIDTH FX: off`. Click toggles
+       state.bandwidthFx; pill colour reflects state.
+- 17.2 Backend: SSE endpoint `/api/mesh/events` OR polled tail.
+       Emits packet-sent events with src/dst/kind/bytes/ts. Easiest:
+       reuse Session 18 bridge's `/api/mesh/events` if that exists,
+       just filter for `kind in ("tactical","loc_summary")`.
+- 17.3 Frontend animation: per-frame update of state.flyingCapsules,
+       lerping along edge positions from the topology panel's
+       layout.
+- 17.4 Capsule rendering: rounded rectangle with a small dot, width
+       ∝ bytes, colour ∝ kind. Tooltip on hover.
+- 17.5 Cap concurrent animations to 20 — drop oldest if exceeded.
+- 17.6 Auto-fade in last 20% of travel for smoother visual end.
+- 17.7 Default state: off. Persist toggle state in `localStorage`
+       across reloads (presenter sets it once, demo machine
+       remembers).
+
+**Considerations:**
+
+- **💡 NOTE: compression happens once at source, not at every hop.**
+  Animate the SAME capsule along multiple hops, not a new one at
+  each. The capsule label `32 B` stays 32 B for the whole flight —
+  it doesn't shrink at relay nodes.
+- **💡 NOTE: this is decoration.** Session 16's side panel is the
+  credibility. If a judge asks "are those packets real?", point at
+  the panel numbers; the capsules are just visualization of what
+  the numbers report.
+- **💡 NOTE: default off matters.** Most of the demo isn't about
+  the mesh. Constant capsule animation during triangulation /
+  kill-button / sandbox moments would distract.
+- **⚠ Performance.** Cap concurrent capsules. With 20 simultaneous
+  rounded-rect renders at 60 fps the GPU is fine; with 200 it isn't.
+
+**⚠ HUMAN INPUT NEEDED:**
+
+1. Default state: off (suggested) vs on. Confirm.
+2. Capsule shape: small rounded rect (suggested), pill, or glowing
+   dot. Confirm.
+3. Where capsules render: only in the mesh topology panel
+   (suggested, less clutter) vs also overlaid on the main map.
+4. Persist toggle state in localStorage? Suggested yes.
+
+**Acceptance criteria:**
+
+- Toggle pill in top bar; click flips state.
+- When on, every mesh send spawns a capsule that lerps along the
+  correct edge in the topology panel.
+- Capsule colour and width reflect payload kind and byte count.
+- Hover shows tooltip with packet details.
+- 60 fps maintained with up to 20 concurrent capsules.
+- When off, no animation but the side panel (Session 16) keeps
+  updating numbers.
+- Toggle state persists across page reload.
+
+---
 
 ---
 
@@ -1498,6 +3237,8 @@ ML hookup (deferred to when classifier ships):
 - `DETECTION: perfect` badge always visible.
 - `PerfectClassifier` returns the dropped label with confidence
   0.95; UI's classifier-mode hook is wired and ready for ML swap.
+
+---
 
 ---
 

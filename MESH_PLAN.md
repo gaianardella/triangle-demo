@@ -1,10 +1,165 @@
-# Mesh Track — Implementation Plan
+# Mesh Track — Implementation Plan & Reference
 
 Architectural plan for the Kova "Tactical Mesh" track. Pairs with the
 existing acoustic triangulation pipeline so the mesh demo and the
 triangulation demo tell one coherent story. Built so that 95% of the
 system runs without physical radios — hardware is reserved for the
 moments that need it.
+
+---
+
+## How the mesh system works (implemented)
+
+### Mesh data system (`mesh/` package)
+
+The mesh package models a bandwidth-constrained tactical radio network.
+Its job is to demonstrate that the full detection + localization story
+can be transmitted using a fraction of the bytes that naive JSON would
+require.
+
+**Two packet types are defined in `mesh/payload.py`:**
+
+| Packet | Magic | Wire size | When sent | Content |
+|--------|-------|-----------|-----------|---------|
+| `TACTICAL_EVENT` | `0xE001` | **32 B** payload + 16 B HMAC = **46 B** total | When a drone detects an acoustic event | label code, drone ID, timestamp (ns), lat/lon (E7 fixed-point), confidence |
+| `LOC_SUMMARY` | `0xE002` | **24 B** payload + 16 B HMAC = **40 B** total | When the operator node receives a triangulation result | label code, scenario event ID (hash), lat/lon (E7), CEP50 (dm) |
+
+Both formats use fixed-width binary structs (`struct.pack`) with
+E7 fixed-point coordinates (lat × 10⁷ as int32). A naive JSON row
+for the same data is ~500 B (tactical) or ~8 500 B (loc summary) —
+roughly **91–94% compression**.
+
+**Frame layer (`mesh/frame.py`):** each payload is wrapped in a frame
+that adds source node ID, sequence number, TTL, and a 16-byte HMAC-SHA256
+truncated tag. Frames are broadcast to all neighbours; each node
+deduplicates by (src_id, seq) and decrements TTL before re-broadcasting
+(flood routing).
+
+**Transport (`mesh/transport/`):** two backends exist —
+- `sim` — in-process shared bus (SimTransport), used in tests and the
+  CLI demo. All nodes share a Python dict; no sockets needed.
+- `udp` — localhost UDP on port 19987 for multi-terminal demos where
+  each node runs in a separate terminal.
+
+**`mesh/node.py` — MeshNode:** the core class. Handles send, receive,
+dedup, flood-forward, and optional operator console printing.
+
+**`mesh/metrics.py` — MeshMetrics:** simple counters (bytes sent/received,
+frames sent/received, tactical/loc_summary counts). Shared singleton
+via `get_metrics()`.
+
+**`mesh/publish.py`:** helpers to bulk-publish events.json and
+localizations.json over the mesh (used by `python -m mesh demo`).
+
+---
+
+### Mesh bandwidth API (`triangulation/server.py → /api/mesh/bandwidth`)
+
+The server pre-computes bandwidth figures from the static data files
+once on first request and caches them. The endpoint is stateless —
+the UI maintains its own running session totals.
+
+**What the server computes:**
+
+```
+events.json (all rows)
+  → filter: relevant == true
+  → for each row: event_row_to_tactical(row) → 32 B packet
+  → measure: mesh_bytes = len(packet) + 16 (HMAC)
+             json_bytes = len(json.dumps(row))
+  → group by scenario filename
+
+localizations.json (all entries)
+  → skip bearing-only fixes (no CEP50 → no loc_summary emitted)
+  → for each entry: pack_loc_summary(entry) → 24 B packet
+  → measure: mesh_bytes = len(packet) + 16
+             json_bytes = len(json.dumps(entry))
+  → group by scenario filename
+```
+
+**Response shape:**
+
+```json
+{
+  "total": {
+    "mesh_bytes": 1472, "json_bytes": 19800,
+    "saved_bytes": 18328, "saved_pct": 92.6,
+    "tactical_packets": 24, "loc_packets": 8
+  },
+  "per_scenario": {
+    "scenario_gunshot_mix.wav": {
+      "tactical_count": 3, "loc_count": 1,
+      "mesh_bytes": 178, "json_bytes": 2350
+    },
+    ...
+  },
+  "samples": {
+    "tactical":    { "kind": "tactical", "mesh_bytes": 46, "json_bytes": 498,
+                     "hex_mesh": "01 e0 01 01 03 02 00 …", "json_text": "{…}", "scenario": "…" },
+    "loc_summary": { "kind": "loc_summary", "mesh_bytes": 40, "json_bytes": 8543,
+                     "hex_mesh": "02 e0 01 01 00 00 …", "json_text": "{…}", "scenario": "…" }
+  },
+  "extrapolation": {
+    "events_per_hour": 1000, "daily_mesh_kb": 3744.0, "daily_json_kb": 31104.0,
+    "per_event_mesh_b": 46, "per_event_json_b": 498
+  }
+}
+```
+
+When `?scenario=<name>` is provided, the `samples` field is overridden
+with that scenario's last tactical and loc_summary packets so the
+popover hex dump always reflects the current scenario.
+
+---
+
+### Mesh bandwidth display (UI strip + popover)
+
+The strip sits in the top bar and is always visible during the demo.
+
+**Strip — two rows:**
+
+```
+MESH 46 B  /  JSON 498 B  /  SAVED 91%   ⓘ
+TOTAL 178 B sent  ·  2.2 KB saved
+```
+
+- **Row 1** — last packet figures: mesh wire size vs JSON equivalent
+  and compression ratio. Updates when the scenario changes (reflects
+  that scenario's tactical or loc_summary packet).
+- **Row 2** — running session totals: mesh bytes sent and JSON bytes
+  saved so far this pitch. Accumulates as you advance through scenarios.
+  Does NOT reset unless you click the reset button in the popover.
+
+**Update cadence (by design):**
+
+| Event | What updates |
+|-------|-------------|
+| Page load | Row 2 shows grand totals from all scenarios |
+| Scenario advances | Row 1 → current scenario's packet; Row 2 += that scenario's bytes |
+| Within a scenario (phase changes) | **Nothing changes** — correct, see below |
+| Reset button clicked | Both rows reset to zero |
+
+**Why nothing changes within a scenario:** the two packets for a scenario
+(tactical at DETECT, loc_summary at LOCALIZE) are both accounted for
+when the scenario loads. There is no new data to transmit mid-scenario —
+the drone sent its event at DETECT, the operator received the loc_summary
+at LOCALIZE. These are instantaneous radio events; the strip captures them
+at scenario load time rather than animating them phase-by-phase.
+
+> **Potential enhancement (Session 17 / future):** call `fetchBandwidth`
+> at each phase transition and accumulate tactical bytes at DETECT and
+> loc_summary bytes at LOCALIZE, so the running total visibly ticks up
+> twice per scenario in sync with the animation. This is purely cosmetic.
+
+**Popover (click strip to open):**
+
+- Left panel: mesh hex dump of the last packet (8 bytes per line)
+- Right panel: JSON equivalent (truncated at 400 chars)
+- Bar chart: total mesh bytes vs total JSON bytes for the session
+- Extrapolation footer: projected daily bandwidth at 1 000 events/hour
+- Reset button: zeroes session totals (useful before a live pitch)
+
+---
 
 ## Top-down: what is shown in the demo
 
