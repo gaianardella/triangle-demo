@@ -6,6 +6,8 @@ Uso:
   conda activate audio_env
   python detect_audio.py data/scenarios/scenario_tank_mix.wav
   python detect_audio.py --folder data/scenarios
+  python detect_audio.py --folder data/scenarios --json
+  python detect_audio.py --folder data/scenarios -o data/scenarios/detections.json
   python detect_audio.py --benchmark   # test DCASE / ESC-50 / samples
 """
 
@@ -15,6 +17,7 @@ import argparse
 import csv
 import json
 import sys
+import time
 from collections import Counter
 from pathlib import Path
 
@@ -304,17 +307,38 @@ def classify_audio_file(audio_path, sr=SR):
     return classify_audio_array(audio, sr)
 
 
-# ── CLI ─────────────────────────────────────────────────────────────────────
-def detect_file(path: Path) -> dict:
+# ── CLI / integrazione ──────────────────────────────────────────────────────
+def detect_file(path: Path, drone_id: str = "drone_1") -> dict:
     audio, sr = librosa.load(path, sr=SR)
     events = scan_audio_for_events(audio, sr)
     label = classify_audio_array(audio, sr)
+
+    frame_length = int(sr * 0.01)
+    energy = np.array([
+        np.sqrt(np.mean(audio[i:i + frame_length] ** 2))
+        for i in range(0, len(audio) - frame_length, frame_length)
+    ])
+    peak_offset_s = float(np.argmax(energy) * 0.01) if len(energy) else 0.0
+    timestamp_ns = int((time.time() + peak_offset_s) * 1e9)
+
+    counts = Counter(events)
+    if label and label in counts and events:
+        confidence = float(counts[label] / len(events))
+    elif events:
+        confidence = float(max(counts.values()) / len(events))
+    else:
+        confidence = 0.0
+
     return {
-        "path": str(path),
-        "label": label,
-        "label_human": CATEGORY_LABELS.get(label, label or "silenzio / sconosciuto"),
-        "window_counts": dict(Counter(events)),
-        "windows_total": len(events) if events else 0,
+        "drone_id":      drone_id,
+        "path":           str(path),
+        "label":          label,
+        "label_human":    CATEGORY_LABELS.get(label, label or "silenzio"),
+        "timestamp_ns":   timestamp_ns,
+        "confidence":     confidence,
+        "window_counts":  dict(counts),
+        "windows_total":  len(events) if events else 0,
+        "bearing":        None,
     }
 
 
@@ -485,11 +509,26 @@ def run_benchmarks():
     run_demo_samples()
 
 
+def write_results_json(results: list[dict], path: Path) -> Path:
+    path = path.resolve()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(results, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
 def main():
     p = argparse.ArgumentParser(description="Detection audio: gunshot, tank, drone, missile_launch")
     p.add_argument("audio", nargs="*", help="file .wav/.flac/.mp3 da classificare")
     p.add_argument("--folder", "-f", help="classifica tutti gli audio in una cartella")
-    p.add_argument("--json", action="store_true", help="output JSON (per integrazioni)")
+    p.add_argument("--json", action="store_true", help="stampa JSON su stdout")
+    p.add_argument(
+        "-o", "--output",
+        help="salva JSON su file (default con --folder: <cartella>/detections.json)",
+    )
+    p.add_argument("--drone-id", default="drone_1", help="ID drone per payload TDOA/WebSocket")
     p.add_argument("--benchmark", action="store_true", help="test DCASE gunshot, ESC-50, samples/")
     args = p.parse_args()
 
@@ -503,14 +542,26 @@ def main():
         if not args.benchmark:
             print("Uso: python detect_audio.py <file.wav> [altri file ...]", file=sys.stderr)
             print("     python detect_audio.py --folder data/scenarios", file=sys.stderr)
+            print("     python detect_audio.py --folder data/scenarios --json -o data/scenarios/detections.json", file=sys.stderr)
             print("     python detect_audio.py --benchmark", file=sys.stderr)
             sys.exit(1)
         return
 
-    results = [detect_file(f) for f in files]
+    results = [detect_file(f, drone_id=args.drone_id) for f in files]
+    payload = json.dumps(results, indent=2, ensure_ascii=False)
+
+    out_path: Path | None = None
+    if args.output:
+        out_path = Path(args.output)
+    elif args.folder and args.json:
+        out_path = Path(args.folder) / "detections.json"
+
+    if out_path is not None:
+        written = write_results_json(results, out_path)
+        print(f"JSON salvato: {written}", file=sys.stderr)
 
     if args.json:
-        print(json.dumps(results, indent=2, ensure_ascii=False))
+        print(payload)
         return
 
     print("── Detection (4 classi) ────────────────────────────────")
