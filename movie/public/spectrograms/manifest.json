@@ -1,0 +1,96 @@
+{
+  "fps": 30,
+  "headFrames": 15,
+  "tailFrames": 0,
+  "switchSec": 2.0,
+  "audioLenSec": 7.0,
+  "scenarios": [
+    {
+      "id": "tank",
+      "title": "TANK ENGINE under DRONE BUZZ",
+      "rawPng": "tank_raw.png",
+      "prePng": "tank_pre.png",
+      "rawAudio": "tank_raw.wav",
+      "preAudio": "tank_pre.wav",
+      "audioStartSec": 0.0,
+      "durationSec": 7.0,
+      "startFrame": 0,
+      "frames": 225,
+      "switchAtFrame": 75,
+      "verdictAtFrame": 105,
+      "verdictTriggerSec": 3.0,
+      "verdict": {
+        "label": "tank",
+        "labelHuman": "Tank engine",
+        "relevant": true,
+        "peakConfidence": 0.626,
+        "shareConfidence": 0.935,
+        "windowCounts": {
+          "tank": 43,
+          "missile_launch": 2,
+          "drone": 1
+        },
+        "silentWindows": 25,
+        "totalWindows": 71
+      }
+    },
+    {
+      "id": "gunshot",
+      "title": "GUNSHOT under DRONE BUZZ",
+      "rawPng": "gunshot_raw.png",
+      "prePng": "gunshot_pre.png",
+      "rawAudio": "gunshot_raw.wav",
+      "preAudio": "gunshot_pre.wav",
+      "audioStartSec": 3.0,
+      "durationSec": 7.0,
+      "startFrame": 225,
+      "frames": 225,
+      "switchAtFrame": 75,
+      "verdictAtFrame": 120,
+      "verdictTriggerSec": 3.499,
+      "verdict": {
+        "label": "gunshot",
+        "labelHuman": "Gunfire",
+        "relevant": true,
+        "peakConfidence": 0.733,
+        "shareConfidence": 0.056,
+        "windowCounts": {
+          "tank": 33,
+          "missile_launch": 1,
+          "gunshot": 2
+        },
+        "silentWindows": 35,
+        "totalWindows": 71
+      }
+    },
+    {
+      "id": "missile",
+      "title": "MISSILE LAUNCH under DRONE BUZZ",
+      "rawPng": "missile_raw.png",
+      "prePng": "missile_pre.png",
+      "rawAudio": "missile_raw.wav",
+      "preAudio": "missile_pre.wav",
+      "audioStartSec": 11.0,
+      "durationSec": 7.0,
+      "startFrame": 450,
+      "frames": 225,
+      "switchAtFrame": 75,
+      "verdictAtFrame": 127,
+      "verdictTriggerSec": 3.749,
+      "verdict": {
+        "label": "missile_launch",
+        "labelHuman": "Missile / UCAS launch",
+        "relevant": true,
+        "peakConfidence": 0.763,
+        "shareConfidence": 0.19,
+        "windowCounts": {
+          "tank": 17,
+          "missile_launch": 4
+        },
+        "silentWindows": 50,
+        "totalWindows": 71
+      }
+    }
+  ],
+  "totalFrames": 675
+}

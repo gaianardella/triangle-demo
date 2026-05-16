@@ -12,11 +12,14 @@ const FRAME_HEIGHT = 720;
 
 const TARGET = { x: 768, y: 360 };
 
-const WAVE_START_FRAME = 75;
+const WAVE_START_FRAME = 30;
 const WAVE_SPEED_PX_PER_FRAME = 7.3;
-const LINES_START_FRAME = 150;
-const WAVE_FADE_END_FRAME = 159;
-const THREAT_FRAME = 160;
+const WAVE_FADE_START_FRAME = 105;
+const WAVE_FADE_END_FRAME = 114;
+// "Comparison pause": between the wave fading out and the triangulation lines snapping in,
+// the drones hold their RCV_T readouts while the system "compares timestamps".
+const LINES_START_FRAME = 135;
+const THREAT_FRAME = 145;
 
 const MS_PER_PIXEL = 0.3;
 
@@ -55,9 +58,9 @@ const waveRadius = (frame: number): number => {
 };
 
 const waveOpacity = (frame: number): number => {
-  if (frame < LINES_START_FRAME) return 1;
+  if (frame < WAVE_FADE_START_FRAME) return 1;
   if (frame > WAVE_FADE_END_FRAME) return 0;
-  return 1 - (frame - LINES_START_FRAME) / (WAVE_FADE_END_FRAME - LINES_START_FRAME);
+  return 1 - (frame - WAVE_FADE_START_FRAME) / (WAVE_FADE_END_FRAME - WAVE_FADE_START_FRAME);
 };
 
 type DroneHit = {
