@@ -2,7 +2,7 @@
 # New → Blueprint → connect this repo → deploy
 services:
   - type: web
-    name: tactical-edge
+    name: triangle-demo
     runtime: python
     plan: free
     buildCommand: pip install -r requirements.txt
