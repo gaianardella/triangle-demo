@@ -87,7 +87,8 @@ def hyperbola(
 
     # Branch sign: Δd > 0 → source on the branch closer to p1 (left branch
     # in the canonical frame, sign = -1); Δd < 0 → right branch, sign = +1.
-    branch = -1.0 if dd > 0 else 1.0
+    # dd = |source-p1| - |source-p2|: dd>0 → closer to p2 → right branch
+    branch = 1.0 if dd > 0 else -1.0
 
     # Parameter range: clip at extent_factor × sep in the conjugate direction
     T_max = np.arcsinh(extent_factor * sep / b)

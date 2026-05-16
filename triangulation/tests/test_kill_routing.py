@@ -1,19 +1,18 @@
-"""Tests for Session 13 — Kill-drone routing in localize_scenario.
+"""Tests for kill-drone routing in localize_scenario.
 
 Covers:
   - All 3 drones alive → point fix returned
-  - 1 drone killed → still 2+ alive → falls back to bearing fix (or point fix)
+  - 1 drone killed → 2 alive → bearing fix (or point fix)
   - 2 drones killed (1 alive) → INSUFFICIENT_SENSORS
   - All drones killed → INSUFFICIENT_SENSORS
-  - 2 alive drones → bearing fix (via killed_drone_ids)
+  - empty set vs None → same result
+  - _localize_no_fix helper contract
   - policy.insufficient_sensors_decide output contract
 """
 
 from __future__ import annotations
 
-import json
 import math
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -21,7 +20,7 @@ import pytest
 from triangulation.locate import localize_scenario, _localize_no_fix
 from triangulation.policy import insufficient_sensors_decide
 
-# ── Shared synthetic event builder ───────────────────────────────────────────
+# ── Synthetic event builder ───────────────────────────────────────────────────
 
 _SPEED_OF_SOUND = 343.0  # m/s
 
@@ -33,15 +32,15 @@ def _make_events(
     sigma_pos_m: float = 2.0,
     rng: np.random.Generator | None = None,
 ) -> list[dict]:
-    """Generate 3-drone synthetic events matching real event schema.
+    """Generate 3-drone synthetic events matching the real event schema.
 
-    Fields required by locate.py:
+    Schema fields required by locate.py:
       position: {lat, lon, alt_m}
       event_time_ns: int (nanoseconds)
       relevant: bool
       drone_id: str
-      time_prediction_error_ms: float  (sigma_t field)
-      position_error_m: float          (sigma_pos field)
+      time_prediction_error_ms: float
+      position_error_m: float
     """
     if rng is None:
         rng = np.random.default_rng(42)
@@ -56,20 +55,22 @@ def _make_events(
         R = 6_371_000
         dlat = math.radians(lat2 - lat1)
         dlon = math.radians(lon2 - lon1)
-        a = math.sin(dlat / 2) ** 2 + math.cos(math.radians(lat1)) * math.cos(
-            math.radians(lat2)
-        ) * math.sin(dlon / 2) ** 2
+        a = (
+            math.sin(dlat / 2) ** 2
+            + math.cos(math.radians(lat1))
+            * math.cos(math.radians(lat2))
+            * math.sin(dlon / 2) ** 2
+        )
         return 2 * R * math.asin(math.sqrt(a))
 
-    # Ground truth travel times from source to each drone
-    t0_s = 1_700_000_000.0  # arbitrary base timestamp (s)
+    t0_s = 1_700_000_000.0  # arbitrary base timestamp (seconds)
     events = []
     for drone_id, dlat, dlon in drone_positions:
         dist_m = haversine_m(source_lat, source_lon, dlat, dlon)
         travel_s = dist_m / _SPEED_OF_SOUND
-        noise_s  = rng.normal(0, sigma_t_ms * 1e-3)
+        noise_s = rng.normal(0, sigma_t_ms * 1e-3)
         measured_ns = int((t0_s + travel_s + noise_s) * 1e9)
-        # Add position noise
+
         pos_noise_lat = rng.normal(0, sigma_pos_m / 111_320)
         pos_noise_lon = rng.normal(
             0, sigma_pos_m / (111_320 * math.cos(math.radians(dlat)))
@@ -83,18 +84,18 @@ def _make_events(
                     "alt_m": 50.0,
                 },
                 "event_time_ns": measured_ns,
-                "timestamp_ns":  measured_ns,
+                "timestamp_ns": measured_ns,
                 "label": "gunshot",
                 "relevant": True,
                 "time_prediction_error_ms": sigma_t_ms,
-                "position_error_m":         sigma_pos_m,
+                "position_error_m": sigma_pos_m,
                 "path": "test_scenario.wav",
             }
         )
     return events
 
 
-# ── Tests ────────────────────────────────────────────────────────────────────
+# ── All 3 drones alive ────────────────────────────────────────────────────────
 
 
 class TestAllDronesAlive:
@@ -113,8 +114,11 @@ class TestAllDronesAlive:
         assert result["cep50_m"] > 0
 
 
+# ── 1 drone killed ────────────────────────────────────────────────────────────
+
+
 class TestOneKilledDrone:
-    """Kill drone_1; drone_2 + drone_3 remain — should produce a bearing fix."""
+    """Kill one drone; the remaining two should still produce a fix."""
 
     def test_still_produces_fix(self):
         events = _make_events()
@@ -124,7 +128,6 @@ class TestOneKilledDrone:
             killed_drone_ids={"drone_1"},
             rng=np.random.default_rng(3),
         )
-        # With 2 alive drones that are geometrically separated, we get a bearing fix
         assert result["recommended_action"] != "INSUFFICIENT_SENSORS"
         assert result["fix_kind"] in ("point", "bearing")
 
@@ -137,6 +140,19 @@ class TestOneKilledDrone:
             rng=np.random.default_rng(4),
         )
         assert result["fix_kind"] != "none"
+
+    def test_kill_drone_3_still_fixes(self):
+        events = _make_events()
+        result = localize_scenario(
+            events,
+            mc_samples=30,
+            killed_drone_ids={"drone_3"},
+            rng=np.random.default_rng(11),
+        )
+        assert result["fix_kind"] in ("point", "bearing")
+
+
+# ── 2 drones killed (1 alive) ────────────────────────────────────────────────
 
 
 class TestTwoDronesKilled:
@@ -183,10 +199,33 @@ class TestTwoDronesKilled:
         )
         assert result["weapons_release_required"] is False
 
+    def test_required_fields_present(self):
+        """All output dict keys must exist even for the no-fix path."""
+        events = _make_events()
+        result = localize_scenario(
+            events,
+            mc_samples=30,
+            killed_drone_ids={"drone_1", "drone_2"},
+            rng=np.random.default_rng(12),
+        )
+        for key in (
+            "fix_kind",
+            "source",
+            "cep50_m",
+            "recommended_action",
+            "weapons_release_required",
+            "cloud_latlon",
+            "hyperbola_latlon",
+            "wedge_latlon",
+            "drones_used",
+        ):
+            assert key in result, f"Missing key: {key}"
+
+
+# ── All drones killed ─────────────────────────────────────────────────────────
+
 
 class TestAllDronesKilled:
-    """Kill all 3 drones — must return INSUFFICIENT_SENSORS."""
-
     def test_insufficient_sensors(self):
         events = _make_events()
         result = localize_scenario(
@@ -199,24 +238,45 @@ class TestAllDronesKilled:
         assert result["fix_kind"] == "none"
         assert result["source"] is None
 
+    def test_cloud_is_empty(self):
+        events = _make_events()
+        result = localize_scenario(
+            events,
+            mc_samples=30,
+            killed_drone_ids={"drone_1", "drone_2", "drone_3"},
+            rng=np.random.default_rng(13),
+        )
+        assert result["cloud_latlon"] == []
+
+    def test_weapons_release_false(self):
+        events = _make_events()
+        result = localize_scenario(
+            events,
+            mc_samples=30,
+            killed_drone_ids={"drone_1", "drone_2", "drone_3"},
+            rng=np.random.default_rng(14),
+        )
+        assert result["weapons_release_required"] is False
+
+
+# ── Empty set vs None ─────────────────────────────────────────────────────────
+
 
 class TestKilledIdsEmptyVsNone:
-    """Empty set == None == no filter applied."""
+    """An empty set should behave identically to None (no drones filtered)."""
 
     def test_empty_set_same_as_none(self):
-        rng_a = np.random.default_rng(10)
-        rng_b = np.random.default_rng(10)
         events = _make_events()
-        r_none  = localize_scenario(events, mc_samples=20, killed_drone_ids=None, rng=rng_a)
-        r_empty = localize_scenario(events, mc_samples=20, killed_drone_ids=set(), rng=rng_b)
-        # Both should be full point fixes
-        assert r_none["fix_kind"]  == r_empty["fix_kind"]
+        r_none  = localize_scenario(events, mc_samples=20, killed_drone_ids=None,  rng=np.random.default_rng(10))
+        r_empty = localize_scenario(events, mc_samples=20, killed_drone_ids=set(), rng=np.random.default_rng(10))
+        assert r_none["fix_kind"]           == r_empty["fix_kind"]
         assert r_none["recommended_action"] == r_empty["recommended_action"]
 
 
-class TestLocalize_no_fix:
-    """Unit-test the _localize_no_fix helper directly."""
+# ── _localize_no_fix helper ───────────────────────────────────────────────────
 
+
+class TestLocalizeNoFix:
     def test_required_fields(self):
         events = _make_events()
         result = _localize_no_fix(events)
@@ -231,10 +291,20 @@ class TestLocalize_no_fix:
         assert result["recommended_action"] == "INSUFFICIENT_SENSORS"
         assert result["fix_kind"] == "none"
 
+    def test_localization_confidence_zero(self):
+        result = _localize_no_fix(_make_events())
+        assert result["localization_confidence"] == 0.0
+
+    def test_hyperbola_and_wedge_empty(self):
+        result = _localize_no_fix(_make_events())
+        assert result["hyperbola_latlon"] == []
+        assert result["wedge_latlon"] == []
+
+
+# ── policy.insufficient_sensors_decide ───────────────────────────────────────
+
 
 class TestInsufficientSensorsDecide:
-    """Unit-test policy.insufficient_sensors_decide."""
-
     def test_action_literal(self):
         d = insufficient_sensors_decide("gunshot")
         assert d.action == "INSUFFICIENT_SENSORS"
@@ -251,6 +321,15 @@ class TestInsufficientSensorsDecide:
         d = insufficient_sensors_decide("unknown_sound")
         assert d.severity == "low"
 
-    def test_reason_mentions_restore(self):
+    def test_severity_low_for_none_label(self):
+        d = insufficient_sensors_decide(None)
+        assert d.severity == "low"
+
+    def test_reason_mentions_restore_or_drone(self):
         d = insufficient_sensors_decide("gunshot")
         assert "restore" in d.reason.lower() or "drone" in d.reason.lower()
+
+    def test_gunshot_severity_not_low(self):
+        """gunshot is a known label in LABEL_SEVERITY so severity > low."""
+        d = insufficient_sensors_decide("gunshot")
+        assert d.severity != "low"

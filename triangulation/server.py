@@ -109,11 +109,13 @@ _cache: OrderedDict[tuple, dict] = OrderedDict()
 
 def _cache_key(scenario_id: str,
                sigma_t_ms: float | None,
-               sigma_pos_m: float | None) -> tuple:
+               sigma_pos_m: float | None,
+               killed_drone_ids: set[str] | None = None) -> tuple:
     return (
         scenario_id,
         round(sigma_t_ms,  4) if sigma_t_ms  is not None else None,
         round(sigma_pos_m, 3) if sigma_pos_m is not None else None,
+        tuple(sorted(killed_drone_ids)) if killed_drone_ids else (),
     )
 
 
@@ -150,8 +152,9 @@ def _find_group(scenario_id: str) -> list[dict] | None:
 def _recompute(group: list[dict],
                scenario_id: str,
                sigma_t_ms: float | None,
-               sigma_pos_m: float | None) -> dict:
-    key = _cache_key(scenario_id, sigma_t_ms, sigma_pos_m)
+               sigma_pos_m: float | None,
+               killed_drone_ids: set[str] | None = None) -> dict:
+    key = _cache_key(scenario_id, sigma_t_ms, sigma_pos_m, killed_drone_ids)
     cached = _cache_get(key)
     if cached is not None:
         return cached
@@ -162,6 +165,7 @@ def _recompute(group: list[dict],
         mc_samples=120,
         sigma_t_override_ms=sigma_t_ms,
         sigma_pos_override_m=sigma_pos_m,
+        killed_drone_ids=killed_drone_ids,
         rng=rng,
     )
     _cache_put(key, entry)
@@ -231,9 +235,13 @@ def api_scenario(scenario_id: str):
 
     sigma_t_ms  = request.args.get("sigma_t_ms",  type=float)
     sigma_pos_m = request.args.get("sigma_pos_m", type=float)
+    killed_raw  = request.args.get("killed", "").strip()
+    killed_drone_ids: set[str] | None = (
+        {d for d in killed_raw.split(",") if d} if killed_raw else None
+    )
 
     try:
-        return jsonify(_recompute(group, scenario_id, sigma_t_ms, sigma_pos_m))
+        return jsonify(_recompute(group, scenario_id, sigma_t_ms, sigma_pos_m, killed_drone_ids))
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
 
@@ -309,6 +317,8 @@ def api_sandbox():
     sigma_t_ms  = float(body.get("sigma_t_ms",  1.0))
     sigma_pos_m = float(body.get("sigma_pos_m", 5.0))
     label       = str(body.get("label",         "gunshot"))
+    killed_list = body.get("killed_drone_ids", [])
+    killed_drone_ids: set[str] | None = set(killed_list) if killed_list else None
 
     if len(drones) < 3:
         return jsonify({"error": "Need at least 3 drones for TDOA"}), 400
@@ -326,6 +336,7 @@ def api_sandbox():
             mc_samples=120,
             sigma_t_override_ms=sigma_t_ms,
             sigma_pos_override_m=sigma_pos_m,
+            killed_drone_ids=killed_drone_ids,
             rng=rng2,
         )
         entry["sandbox_truth"] = {

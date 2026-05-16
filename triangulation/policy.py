@@ -69,6 +69,7 @@ ACTION_BONUS: dict[str, float] = {
     "RECON":  10.0,
     "SEARCH":  5.0,
     "HOLD":    0.0,
+    "INSUFFICIENT_SENSORS": 0.0,
 }
 
 # Each metre of CEP50 beyond 10 m subtracts this from the priority score.
@@ -81,7 +82,7 @@ ALWAYS_STRIKE_LABELS: tuple[str, ...] = ("gunshot",)
 
 # ── Types ────────────────────────────────────────────────────────────────────
 
-Action = Literal["STRIKE", "RECON", "SEARCH", "HOLD"]
+Action = Literal["STRIKE", "RECON", "SEARCH", "HOLD", "INSUFFICIENT_SENSORS"]
 
 
 @dataclass(frozen=True)
@@ -92,6 +93,20 @@ class Decision:
     reason: str
     severity: str
     weapons_release_required: bool
+
+
+def insufficient_sensors_decide(label: str | None) -> Decision:
+    """Decision when fewer than 2 alive drones make a fix impossible."""
+    severity = LABEL_SEVERITY.get(label, "low")
+    return Decision(
+        action="INSUFFICIENT_SENSORS",
+        reason=(
+            "fewer than 2 alive drones — cannot compute fix; "
+            "restore drones to resume localization"
+        ),
+        severity=severity,
+        weapons_release_required=False,
+    )
 
 
 def bearing_decide(label: str | None) -> Decision:

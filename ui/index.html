@@ -305,6 +305,41 @@
     }
     .entity.drone.strike-drone .label { color: var(--hostile); }
 
+    /* Session 13 — killed drone */
+    .entity.drone.drone-killed svg { opacity: 0.25; filter: grayscale(1); }
+    .entity.drone.drone-killed .label { color: #555; text-decoration: line-through; opacity: 0.6; }
+
+    /* Kill pills section */
+    .kill-section { margin-bottom: 8px; }
+    .kill-section h3 { font-size: 10px; letter-spacing: .08em; color: var(--text-dim);
+      text-transform: uppercase; margin: 0 0 6px; }
+    .kill-pills { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 6px; }
+    .kill-pill {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 3px 8px; border-radius: 4px; font-size: 11px; font-family: monospace;
+      cursor: pointer; border: 1px solid rgba(79,216,122,0.35);
+      background: rgba(79,216,122,0.08); color: var(--accent); transition: all 0.15s;
+    }
+    .kill-pill:hover { border-color: var(--accent); background: rgba(79,216,122,0.16); }
+    .kill-pill.killed {
+      border-color: rgba(232,92,74,0.55); background: rgba(232,92,74,0.12);
+      color: var(--hostile); text-decoration: line-through; opacity: 0.85;
+    }
+    .kill-pill.killed:hover { opacity: 1; background: rgba(232,92,74,0.2); }
+    .kill-reset-btn {
+      font-size: 10px; padding: 2px 8px; border-radius: 3px; cursor: pointer;
+      border: 1px solid rgba(100,100,100,0.4); background: transparent;
+      color: var(--text-dim); letter-spacing: .05em;
+    }
+    .kill-reset-btn:hover { color: var(--text); border-color: var(--text-dim); }
+    #insufficientBanner {
+      display: none; margin: 6px 0; padding: 6px 10px; border-radius: 4px;
+      font-size: 11px; font-weight: 600; letter-spacing: .06em; text-align: center;
+      background: rgba(232,92,74,0.15); border: 1px solid rgba(232,92,74,0.5);
+      color: var(--hostile);
+    }
+    #insufficientBanner.visible { display: block; }
+
     /* ── Neutralized target ───────────────────────────────────── */
     @keyframes neutralize {
       0%   { opacity: 1; transform: translate(-50%,-50%) scale(1); }
@@ -371,7 +406,7 @@
     /* ── ROE banner ───────────────────────────────────────────── */
     #roeBanner {
       position: absolute;
-      bottom: 36px;
+      bottom: 62px;
       left: 50%;
       transform: translateX(-50%);
       z-index: 10;
@@ -1057,8 +1092,8 @@
     .scenario-cards.ready .sc-sandbox-btn { display: inline-block; }
 
     /* entity-layer cursor override in sandbox mode */
-    .entity-layer.sandbox-mode { cursor: crosshair; }
-    .entity-layer.sandbox-mode .entity { cursor: grab; }
+    .entity-layer.sandbox-mode { cursor: crosshair; pointer-events: auto; }
+    .entity-layer.sandbox-mode .entity { cursor: grab; pointer-events: auto; }
     .entity-layer.sandbox-mode .entity:active { cursor: grabbing; }
 
     /* error line drawn via canvas in sandbox — no extra CSS needed */
@@ -1459,6 +1494,12 @@
           <div class="money-chart-label">σ_t (ms) vs CEP50 (m) — current operating point ●</div>
         </div>
       </div>
+      <div class="kill-section" id="killSection" style="display:none">
+        <h3>Drone status <span style="opacity:.5;font-size:9px">[K] toggle</span></h3>
+        <div class="kill-pills" id="killPills"></div>
+        <div id="insufficientBanner">⊘ INSUFFICIENT SENSORS — restore drones to resume fix</div>
+        <button class="kill-reset-btn" id="killResetBtn" onclick="resetKills()">RESTORE ALL</button>
+      </div>
       <h2 style="margin-top: 6px">Event log</h2>
       <div class="log" id="eventLog"></div>
     </aside>
@@ -1755,7 +1796,9 @@
       sandboxError_m: null,   // distance truth→estimate in metres
       sandboxFetching: false,
       sandboxFetchTimer: 0,   // debounce countdown (ms)
-      sandboxLabel: "gunshot"
+      sandboxLabel: "gunshot",
+      // Session 13 — kill-drone
+      killedDroneIds: new Set()
     };
 
     // ── Session 16 — Mesh bandwidth session state ─────────────────────────
@@ -2169,6 +2212,7 @@
           if (d.heading != null) el.dataset.heading = d.heading;
           el.classList.toggle("recon-drone",  !!d.recon);
           el.classList.toggle("strike-drone", !!d.strike);
+          el.classList.toggle("drone-killed", state.killedDroneIds.has(d.id));
         }
       }
       for (const t of state.targets) {
@@ -2433,6 +2477,7 @@
       state.wedge           = [];
       state.wedgeAlpha      = 0;
       state.fixKind         = "point";
+      state.killedDroneIds  = new Set();
       const cur = state.frames[i];
       state.geoBounds = cur.bounds;
       syncMapView(cur.bounds);
@@ -2440,6 +2485,7 @@
       updateScenarioCards();
       updatePhaseUI();
       syncSlidersToScenario();
+      renderKillPills();
       addLog(`Scenario ${i + 1}: ${cur.meta.title}`, "ok");
       // Session 16: update mesh bandwidth strip for this scenario
       fetchBandwidth(cur.entry ? cur.entry.scenario : null);
@@ -2454,6 +2500,8 @@
       clearTargetStyles();
       hideRoeBanner();
       hideReconFeed();
+      state.killedDroneIds  = new Set();
+      renderKillPills();
       state.completed       = false;
       state.cloudFromSlider = false;
       state.autoplay        = false;   // manual reset returns to manual mode
@@ -2821,6 +2869,8 @@
             showRoeBanner(`▶ RECON ORDERED · ${e.label_human || e.label}`, "roe-recon");
           } else if (act === "SEARCH") {
             showRoeBanner(`⊹ SEARCH ORDERED · CEP50 ${e.cep50_m}m — SWEEPING SECTOR`, "roe-recon");
+          } else if (act === "INSUFFICIENT_SENSORS") {
+            showRoeBanner("⊘ INSUFFICIENT SENSORS · restore drones to resume fix", "roe-hold");
           } else {
             showRoeBanner(`✕ HOLD FIRE · CEP50 ${e.cep50_m}m — GEOMETRY INSUFFICIENT`, "roe-hold");
           }
@@ -3135,8 +3185,11 @@
       if (!base) { setSliderLoading(false); return; }
 
       try {
+        const killedParam = state.killedDroneIds.size
+          ? `&killed=${[...state.killedDroneIds].join(",")}`
+          : "";
         const url = `${base}/api/scenarios/${encodeURIComponent(scenarioId)}` +
-                    `?sigma_t_ms=${sigT.toFixed(5)}&sigma_pos_m=${sigP.toFixed(3)}`;
+                    `?sigma_t_ms=${sigT.toFixed(5)}&sigma_pos_m=${sigP.toFixed(3)}${killedParam}`;
         const res = await fetch(url);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
@@ -3151,13 +3204,31 @@
           recommended_action: data.recommended_action,
           recommended_action_reason: data.recommended_action_reason,
           localization_confidence: data.localization_confidence,
+          fix_kind:           data.fix_kind ?? cur.entry.fix_kind,
+          hyperbola_latlon:   data.hyperbola_latlon ?? cur.entry.hyperbola_latlon,
+          wedge_latlon:       data.wedge_latlon      ?? cur.entry.wedge_latlon,
         };
-        cur.cloudLatLon = data.cloud_latlon || [];
-        // If in localize/decide/respond/complete phase — re-project cloud
+        cur.fixKind         = data.fix_kind         || cur.fixKind;
+        cur.hyperbolaLatLon = data.hyperbola_latlon || cur.hyperbolaLatLon || [];
+        cur.wedgeLatLon     = data.wedge_latlon     || cur.wedgeLatLon     || [];
+        cur.cloudLatLon     = data.cloud_latlon     || [];
+        renderKillPills();
         const pid = PHASES[state.step].id;
         if (["localize","decide","respond","complete"].includes(pid)) {
-          state.cloud      = projectCloud(cur.cloudLatLon, cur.bounds);
-          state.cloudAlpha = state.cloudAlpha > 0 ? 1 : 0;
+          state.fixKind = cur.fixKind;
+          if (cur.fixKind === "bearing") {
+            state.hyperbola  = projectCloud(cur.hyperbolaLatLon, cur.bounds);
+            state.wedge      = projectCloud(cur.wedgeLatLon, cur.bounds);
+            state.wedgeAlpha = 1;
+            state.cloud      = []; state.cloudAlpha = 0;
+          } else if (cur.fixKind === "none") {
+            state.hyperbola = []; state.wedge = []; state.wedgeAlpha = 0;
+            state.cloud = []; state.cloudAlpha = 0;
+          } else {
+            state.hyperbola = []; state.wedge = []; state.wedgeAlpha = 0;
+            state.cloud      = projectCloud(cur.cloudLatLon, cur.bounds);
+            state.cloudAlpha = state.cloudAlpha > 0 ? 1 : 0;
+          }
         }
         updateLiveReadout(data);
         updateScenarioCards();
@@ -3166,6 +3237,82 @@
       } finally {
         setSliderLoading(false);
       }
+    }
+
+    // ─── Session 13 — Kill-drone helpers ────────────────────────────────────
+
+    function renderKillPills() {
+      const section = document.getElementById("killSection");
+      const pillsEl = document.getElementById("killPills");
+      const banner  = document.getElementById("insufficientBanner");
+      if (!section || !pillsEl) return;
+      if (!state.frames.length) { section.style.display = "none"; return; }
+      const cur = state.frames[state.scenarioIndex];
+      const drones = cur?.entry?.drones_used ?? [];
+      if (!drones.length) { section.style.display = "none"; return; }
+      section.style.display = "";
+      pillsEl.innerHTML = "";
+      for (const d of drones) {
+        const pill = document.createElement("span");
+        pill.className   = "kill-pill" + (state.killedDroneIds.has(d.drone_id) ? " killed" : "");
+        pill.dataset.did = d.drone_id;
+        pill.textContent = d.drone_id;
+        pill.title       = state.killedDroneIds.has(d.drone_id) ? "Click to restore" : "Click to kill";
+        pill.addEventListener("click", () => toggleKillDrone(d.drone_id));
+        pillsEl.appendChild(pill);
+      }
+      const isInsufficient = cur?.entry?.recommended_action === "INSUFFICIENT_SENSORS";
+      if (banner) banner.classList.toggle("visible", isInsufficient);
+    }
+
+    function toggleKillDrone(droneId) {
+      if (state.killedDroneIds.has(droneId)) {
+        state.killedDroneIds.delete(droneId);
+      } else {
+        state.killedDroneIds.add(droneId);
+      }
+      renderKillPills();
+      const sigT = sliderToSigT(parseInt(document.getElementById("sigTSlider")?.value ?? 65));
+      const sigP = sliderToSigP(parseInt(document.getElementById("sigPSlider")?.value ?? 24));
+      recomputeCurrentScenario(sigT, sigP);
+    }
+
+    function cycleKillDrone() {
+      if (!state.frames.length) return;
+      const cur    = state.frames[state.scenarioIndex];
+      const drones = cur?.entry?.drones_used ?? [];
+      if (!drones.length) return;
+      const allKilled = drones.every(d => state.killedDroneIds.has(d.drone_id));
+      if (allKilled) {
+        state.killedDroneIds = new Set();
+      } else {
+        const next = drones.find(d => !state.killedDroneIds.has(d.drone_id));
+        if (next) state.killedDroneIds.add(next.drone_id);
+      }
+      renderKillPills();
+      const sigT = sliderToSigT(parseInt(document.getElementById("sigTSlider")?.value ?? 65));
+      const sigP = sliderToSigP(parseInt(document.getElementById("sigPSlider")?.value ?? 24));
+      recomputeCurrentScenario(sigT, sigP);
+      addLog(`Kill toggle: ${[...state.killedDroneIds].join(", ") || "all restored"}`, "warn");
+    }
+
+    function resetKills() {
+      state.killedDroneIds = new Set();
+      renderKillPills();
+      const sigT = sliderToSigT(parseInt(document.getElementById("sigTSlider")?.value ?? 65));
+      const sigP = sliderToSigP(parseInt(document.getElementById("sigPSlider")?.value ?? 24));
+      recomputeCurrentScenario(sigT, sigP);
+      addLog("All drones restored", "ok");
+    }
+
+    // Sample a random point inside a convex polygon (MC wedge)
+    function sampleFromPolygon(pts) {
+      if (!pts || pts.length === 0) return null;
+      const cx = pts.reduce((s, p) => s + p.x, 0) / pts.length;
+      const cy = pts.reduce((s, p) => s + p.y, 0) / pts.length;
+      const v  = pts[Math.floor(Math.random() * pts.length)];
+      const t  = 0.25 + Math.random() * 0.55;
+      return { x: cx + (v.x - cx) * t, y: cy + (v.y - cy) * t };
     }
 
     function gdopQuality(gdop) {
@@ -3476,6 +3623,7 @@
       initSandboxFromScenario(idx);
       state.sandboxMode = true;
       entityLayer.classList.add("sandbox-mode");
+      entityLayer.style.pointerEvents = "auto";
       document.getElementById("sbBanner").classList.add("visible");
       document.getElementById("btnSandbox").textContent = "EXIT SANDBOX";
       document.getElementById("btnSandbox").classList.add("danger");
@@ -3490,6 +3638,7 @@
       state.sandboxEstimate = null;
       state.sandboxError_m = null;
       entityLayer.classList.remove("sandbox-mode");
+      entityLayer.style.pointerEvents = "";
       document.getElementById("sbBanner").classList.remove("visible");
       document.getElementById("btnSandbox").textContent = "ENTER SANDBOX";
       document.getElementById("btnSandbox").classList.remove("danger");
@@ -3544,6 +3693,7 @@
                    fill="#e8a838" stroke="#c47a10" stroke-width="1.5" opacity="0.92"/>
         </svg>`;
         el.title = "Source — drag to reposition";
+        el.style.pointerEvents = "auto";
         attachSandboxDragHandler(el, "source");
         entityEls.set("sb-source", el);
         entityLayer.appendChild(el);
@@ -3559,24 +3709,28 @@
           <text x="16" y="20" text-anchor="middle" font-size="11" fill="#0a120c" font-weight="bold">D</text>
         </svg>`;
         el.title = `${d.id} — drag to reposition`;
+        el.style.pointerEvents = "auto";
         attachSandboxDragHandler(el, d.id);
         entityEls.set(d.id, el);
         entityLayer.appendChild(el);
       }
     }
 
-    // Attach pointer-capture drag handler to a sandbox entity element
+    // Attach drag handler to a sandbox entity element (document-level listeners
+    // avoid Leaflet swallowing events when pointer leaves the element briefly).
     function attachSandboxDragHandler(el, entityId) {
       el.addEventListener("pointerdown", (ev) => {
         if (!state.sandboxMode) return;
+        ev.preventDefault();
         ev.stopPropagation();
-        el.setPointerCapture(ev.pointerId);
         el.classList.add("dragging");
 
+        const mapRect = document.getElementById("leafletMap").getBoundingClientRect();
+
         function onMove(mv) {
-          const rect  = entityLayer.getBoundingClientRect();
-          const px    = mv.clientX - rect.left;
-          const py    = mv.clientY - rect.top;
+          mv.preventDefault();
+          const px = mv.clientX - mapRect.left;
+          const py = mv.clientY - mapRect.top;
           const latlng = leafletMap.containerPointToLatLng([px, py]);
           const { nx, ny } = latLonToNorm_sb(latlng.lat, latlng.lng);
 
@@ -3589,18 +3743,18 @@
             const d = state.sandboxDrones.find(x => x.id === entityId);
             if (d) { d.lat = latlng.lat; d.lon = latlng.lng; d.nx = nx; d.ny = ny; }
           }
-          scheduleSandboxFetch(250);  // debounced fetch after drag moves
+          scheduleSandboxFetch(200);
         }
 
         function onUp() {
           el.classList.remove("dragging");
-          el.removeEventListener("pointermove", onMove);
-          el.removeEventListener("pointerup",   onUp);
-          scheduleSandboxFetch(0);    // immediate fetch on release
+          document.removeEventListener("pointermove", onMove);
+          document.removeEventListener("pointerup",   onUp);
+          scheduleSandboxFetch(0);
         }
 
-        el.addEventListener("pointermove", onMove);
-        el.addEventListener("pointerup",   onUp);
+        document.addEventListener("pointermove", onMove);
+        document.addEventListener("pointerup",   onUp);
       });
     }
 
@@ -3905,6 +4059,7 @@
         updatePhaseUI();
       }
       if (ev.key === "r" || ev.key === "R") { ev.preventDefault(); resetScenario(); }
+      if (ev.key === "k" || ev.key === "K") { ev.preventDefault(); cycleKillDrone(); }
       if (ev.key === "Escape" && state.sandboxMode) { ev.preventDefault(); exitSandboxMode(); }
     });
 
