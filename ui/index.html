@@ -2484,7 +2484,7 @@
 
       const lp = bwSession.lastPacket;
       const pct = lp.json_bytes > 0
-        ? Math.round(100 * (1 - lp.mesh_bytes / lp.json_bytes)) : 0;
+        ? Math.min(99.9, +(100 * (1 - lp.mesh_bytes / lp.json_bytes)).toFixed(1)) : 0;
 
       row1El.innerHTML =
         `MESH <strong>${_fmtBytes(lp.mesh_bytes)}</strong>` +
@@ -2568,53 +2568,71 @@
       renderBwPopover();
     }
 
+    // Fetch bandwidth data for a scenario and store it — does NOT yet add bytes
+    // to the running total.  The two phase-fire helpers below do that at the
+    // right moment in the animation so the strip updates in sync with the UI.
     async function fetchBandwidth(scenarioKey) {
       try {
         const url = `/api/mesh/bandwidth${scenarioKey ? `?scenario=${encodeURIComponent(scenarioKey)}` : ""}`;
         const resp = await fetch(url);
         if (!resp.ok) return;
         const data = await resp.json();
-        bwSession.serverData   = data;
+        bwSession.serverData    = data;
         bwSession.extrapolation = data.extrapolation;
 
-        // Accumulate per-scenario deltas (count each scenario once per session)
-        if (scenarioKey && !bwSession.activatedSet.has(scenarioKey)) {
-          bwSession.activatedSet.add(scenarioKey);
-          const ps = (data.per_scenario || {})[scenarioKey];
-          if (ps) {
-            bwSession.mesh_bytes += ps.mesh_bytes || 0;
-            bwSession.json_bytes += ps.json_bytes || 0;
-          } else {
-            // Fallback: use per-event sample
-            const s = data.samples && data.samples.tactical;
-            if (s) {
-              bwSession.mesh_bytes += s.mesh_bytes || 0;
-              bwSession.json_bytes += s.json_bytes || 0;
-            }
-          }
-        } else if (!scenarioKey && bwSession.activatedSet.size === 0) {
-          // First load with no scenario — show grand totals
+        if (!scenarioKey && bwSession.activatedSet.size === 0) {
+          // Initial page load — show grand totals immediately (no scenario yet)
           const t = data.total || {};
           bwSession.mesh_bytes = t.mesh_bytes || 0;
           bwSession.json_bytes = t.json_bytes || 0;
+          const samples = data.samples || {};
+          if (samples.tactical) bwSession.lastPacket = samples.tactical;
+          renderBwStrip();
+          if (bwSession.popoverOpen) renderBwPopover();
         }
-
-        // Pick the best last_packet sample — prefer the scenario-specific
-        // loc_summary (richer, one per scenario) then tactical.
-        const samples = data.samples || {};
-        if (samples.loc_summary && samples.loc_summary.scenario === scenarioKey) {
-          bwSession.lastPacket = samples.loc_summary;
-        } else if (samples.tactical && samples.tactical.scenario === scenarioKey) {
-          bwSession.lastPacket = samples.tactical;
-        } else if (samples.tactical) {
-          bwSession.lastPacket = samples.tactical;
-        }
-
-        renderBwStrip();
-        if (bwSession.popoverOpen) renderBwPopover();
+        // For scenario-keyed fetches, bytes are added by fireTacticalPacket /
+        // fireLocSummaryPacket when the matching phase begins — not here.
       } catch (_) {
-        // Server not running in static mode — strip stays at "loading"
+        // Server not running — strip stays at "loading"
       }
+    }
+
+    // Called at DETECT phase start — accounts for the tactical event packet(s)
+    // that the drones "transmit" when they hear the sound.
+    function fireTacticalPacket(scenarioKey) {
+      const data = bwSession.serverData;
+      if (!data) return;
+      const ps = (data.per_scenario || {})[scenarioKey];
+      if (!ps) return;
+
+      bwSession.mesh_bytes += ps.tactical_mesh_bytes || 0;
+      bwSession.json_bytes += ps.tactical_json_bytes || 0;
+
+      // Switch hex dump to the tactical frame for this scenario
+      const samples = data.samples || {};
+      if (samples.tactical) bwSession.lastPacket = samples.tactical;
+
+      renderBwStrip();
+      if (bwSession.popoverOpen) renderBwPopover();
+    }
+
+    // Called at LOCALIZE phase start — accounts for the loc_summary packet that
+    // the operator node "receives" once triangulation completes.
+    function fireLocSummaryPacket(scenarioKey) {
+      const data = bwSession.serverData;
+      if (!data) return;
+      const ps = (data.per_scenario || {})[scenarioKey];
+      if (!ps) return;
+
+      bwSession.mesh_bytes += ps.loc_mesh_bytes || 0;
+      bwSession.json_bytes += ps.loc_json_bytes || 0;
+
+      // Switch hex dump to the loc_summary frame for this scenario
+      const samples = data.samples || {};
+      if (samples.loc_summary) bwSession.lastPacket = samples.loc_summary;
+
+      renderBwStrip();
+      if (bwSession.popoverOpen) renderBwPopover();
     }
 
     // Wire up popover open/close
@@ -2679,6 +2697,11 @@
           ss.sourceSpawned = true;
           ss.lastRingEmitT = 200; // emit first ring immediately
           addLog(`Acoustic signal · ${cur.shortName} · ${cur.entry.label || "unknown"} · listening…`, "warn");
+          // ── Session 16: tactical packet "sent" when detection fires ──────────
+          if (!bwSession.activatedSet.has(cur.entry.scenario)) {
+            bwSession.activatedSet.add(cur.entry.scenario);
+            fireTacticalPacket(cur.entry.scenario);
+          }
         }
 
         // ── Session 14: emit concentric rings from source every 200 ms ──
@@ -2746,6 +2769,8 @@
             } else {
               addLog(`TDOA · ${e.label_human || e.label} · CEP50 ${e.cep50_m}m · ${cur.shortName}`, "hostile");
             }
+            // ── Session 16: loc_summary packet "received" when fix is resolved ─
+            fireLocSummaryPacket(cur.entry.scenario);
           }
         } else {
           state.targets = [];
