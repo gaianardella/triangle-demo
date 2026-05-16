@@ -38,7 +38,7 @@ Options:
 | `--pretty` | off | pretty-print the output |
 | `--quiet` | off | suppress per-scenario log |
 
-## adssa
+## ad
 ## Run the viewer
 
 ```bash
