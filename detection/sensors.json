@@ -3,13 +3,14 @@
     "lat": 62.410,
     "lon": 25.750,
     "alt_m": 0,
-    "comment": "Synthetic threat location for TDOA time offsets (demo / offline WAV)"
+    "comment": "Default threat; per-scenario offset applied automatically unless scenario_sources lists a WAV"
   },
   "sensors": {
     "drone_1": {
       "lat": 62.412,
       "lon": 25.748,
-      "alt_m": 42
+      "alt_m": 42,
+      "comment": "Base triangle — shifted per scenario by detect_audio.sensors_for_scenario()"
     },
     "drone_2": {
       "lat": 62.408,
@@ -21,5 +22,7 @@
       "lon": 25.756,
       "alt_m": 45
     }
-  }
+  },
+  "scenario_overrides": {},
+  "scenario_sources": {}
 }

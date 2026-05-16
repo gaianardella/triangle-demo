@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="it">
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -178,6 +178,10 @@
       transition: left 0.12s linear, top 0.12s linear;
     }
 
+    .entity-layer.live-mission .entity {
+      transition: none;
+    }
+
     .entity svg {
       filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.7));
     }
@@ -269,7 +273,8 @@
     button:hover { background: rgba(79, 216, 122, 0.22); }
     button.active { background: var(--accent); color: var(--bg); }
 
-    input[type="text"] {
+    input[type="text"],
+    select {
       width: 100%;
       margin-top: 8px;
       padding: 6px 8px;
@@ -279,6 +284,44 @@
       border: 1px solid var(--border);
       color: var(--text);
       border-radius: 3px;
+    }
+
+    select { cursor: pointer; }
+
+    select:disabled { opacity: 0.45; }
+
+    .timeline-readout {
+      margin-top: 10px;
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.62rem;
+      line-height: 1.45;
+      color: var(--text-dim);
+    }
+
+    .timeline-readout .phase {
+      color: var(--accent);
+      letter-spacing: 0.06em;
+    }
+
+    .timeline-readout .event-name {
+      color: var(--text);
+      font-size: 0.7rem;
+      margin-top: 4px;
+    }
+
+    .timeline-bar {
+      margin-top: 8px;
+      height: 4px;
+      background: rgba(0, 0, 0, 0.45);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+
+    .timeline-bar-fill {
+      height: 100%;
+      width: 0%;
+      background: var(--accent);
+      transition: width 0.08s linear;
     }
   </style>
 </head>
@@ -296,13 +339,24 @@
     </header>
 
     <aside class="panel" style="grid-row: 2">
-      <h2>Legenda</h2>
+      <h2>Legend</h2>
       <div class="legend" id="legend"></div>
+      <h2 style="margin-top: 14px">Mission timeline</h2>
+      <div class="timeline-readout" id="timelineReadout">
+        <div class="phase" id="timelinePhase">—</div>
+        <div class="event-name" id="timelineEvent">Loading…</div>
+        <div class="timeline-bar"><div class="timeline-bar-fill" id="timelineBar"></div></div>
+      </div>
+      <div class="btn-row" style="margin-top: 8px">
+        <button type="button" id="btnPause">PAUSE</button>
+        <button type="button" id="btnRetry">RETRY</button>
+      </div>
       <h2 style="margin-top: 14px">WebSocket</h2>
       <input type="text" id="wsUrl" value="ws://localhost:8765" placeholder="ws://host:port" />
       <div class="btn-row">
         <button type="button" id="btnConnect">CONNECT</button>
-        <button type="button" id="btnDemo" class="active">DEMO</button>
+        <button type="button" id="btnDemo">DEMO</button>
+        <button type="button" id="btnLocalize" class="active">LOCALIZE</button>
       </div>
     </aside>
 
@@ -364,23 +418,95 @@
       unknown: `<svg width="26" height="26" viewBox="0 0 26 26" fill="none">
         <path d="M13 2 L24 22 H2 Z" stroke="#e85c4a" stroke-width="1.5" fill="rgba(232,92,74,0.2)"/>
         <text x="13" y="17" text-anchor="middle" fill="#e85c4a" font-size="10" font-family="monospace">?</text>
+      </svg>`,
+      gunshot: `<svg width="30" height="30" viewBox="0 0 30 30" fill="none">
+        <circle cx="15" cy="15" r="12" stroke="#e85c4a" stroke-width="1.2" fill="rgba(232,92,74,0.25)"/>
+        <path d="M15 6 L17 13 L15 11 L13 13 Z" fill="#ff8a70"/>
+        <path d="M6 15 L13 13 L11 15 L13 17 Z" fill="#e85c4a" opacity="0.9"/>
+        <path d="M24 15 L17 17 L19 15 L17 13 Z" fill="#e85c4a" opacity="0.9"/>
+        <path d="M15 24 L13 17 L15 19 L17 17 Z" fill="#e85c4a" opacity="0.9"/>
+        <circle cx="15" cy="15" r="3" fill="#fff5f0"/>
+      </svg>`,
+      missile_launch: `<svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+        <path d="M16 4 L20 14 L16 26 L12 14 Z" fill="#e85c4a"/>
+        <path d="M10 18 L16 14 L22 18 L16 22 Z" fill="#c44a3a" opacity="0.85"/>
+        <ellipse cx="16" cy="28" rx="5" ry="2" fill="rgba(232,92,74,0.35)"/>
+      </svg>`,
+      drone_hostile: `<svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+        <circle cx="14" cy="14" r="11" stroke="#e8a838" stroke-width="1.2" fill="rgba(232,168,56,0.2)"/>
+        <path d="M14 5 L16 11 L14 9 L12 11 Z" fill="#e8a838"/>
+        <circle cx="14" cy="14" r="3" fill="#e8a838"/>
       </svg>`
     };
 
+    const LABEL_TO_ICON = {
+      gunshot: "gunshot",
+      missile_launch: "missile_launch",
+      tank: "tank",
+      drone: "drone_hostile"
+    };
+
+    function localizationUrls() {
+      const urls = [];
+      try {
+        urls.push(new URL("../detection/output/localizations.json", location.href).href);
+      } catch (_) { /* ignore */ }
+      if (location.protocol === "http:" || location.protocol === "https:") {
+        const path = location.pathname;
+        if (path.includes("/ui/")) {
+          const root = path.slice(0, path.indexOf("/ui/"));
+          urls.push(`${location.origin}${root}/detection/output/localizations.json`);
+        }
+        urls.push(`${location.origin}/detection/output/localizations.json`);
+      }
+      urls.push("../detection/output/localizations.json");
+      return [...new Set(urls)];
+    }
+
     const LEGEND_ITEMS = [
-      { key: "drone", label: "Friendly UAV" },
-      { key: "tank", label: "Hostile armor" },
-      { key: "soldier", label: "Hostile infantry" },
-      { key: "weapon", label: "Weapon cache" },
-      { key: "vehicle", label: "Hostile vehicle" }
+      { key: "drone", label: "Sensor UAV" },
+      { key: "gunshot", label: "Gunfire (localized)" },
+      { key: "missile_launch", label: "Missile launch" },
+      { key: "tank", label: "Armor / tank" },
+      { key: "drone_hostile", label: "Hostile UAV" }
     ];
+
+    const PHASE_MS = {
+      transit: 4200,
+      listen: 2200,
+      localize: 2800,
+      hold: 5200
+    };
+
+    const PHASE_LABEL = {
+      transit: "UAV REPOSITIONING",
+      listen: "ACOUSTIC DETECTION",
+      localize: "TDOA TRIANGULATION",
+      hold: "CONTACT CONFIRMED"
+    };
+
+    const PHASE_ORDER = ["transit", "listen", "localize", "hold"];
 
     // ─── State ───────────────────────────────────────────────────────────
     const state = {
       drones: [],
       targets: [],
+      cloud: [],
+      cloudAlpha: 0,
       sonars: [],
-      demoMode: true,
+      mode: "localize",
+      localizations: [],
+      frames: [],
+      geoBounds: null,
+      playback: {
+        index: 0,
+        prevIndex: 0,
+        phase: "transit",
+        phaseT: 0,
+        paused: false,
+        missionMs: 0,
+        localizeLogged: false
+      },
       ws: null,
       pingCount: 0,
       lastFrame: performance.now(),
@@ -509,6 +635,130 @@
       state.pingCount++;
     }
 
+    function computeGeoBounds(entry) {
+      const lats = [];
+      const lons = [];
+      for (const d of entry.drones_used) {
+        lats.push(d.lat);
+        lons.push(d.lon);
+      }
+      lats.push(entry.source.lat);
+      lons.push(entry.source.lon);
+      for (const p of entry.cloud_latlon || []) {
+        lats.push(p.lat);
+        lons.push(p.lon);
+      }
+      const pad = 0.00012;
+      return {
+        minLat: Math.min(...lats) - pad,
+        maxLat: Math.max(...lats) + pad,
+        minLon: Math.min(...lons) - pad,
+        maxLon: Math.max(...lons) + pad
+      };
+    }
+
+    function easeInOut(t) {
+      return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+    }
+
+    function lerp(a, b, t) {
+      return a + (b - a) * t;
+    }
+
+    function blendBounds(b1, b2, t) {
+      return {
+        minLat: lerp(b1.minLat, b2.minLat, t),
+        maxLat: lerp(b1.maxLat, b2.maxLat, t),
+        minLon: lerp(b1.minLon, b2.minLon, t),
+        maxLon: lerp(b1.maxLon, b2.maxLon, t)
+      };
+    }
+
+    function shortScenarioName(scenario) {
+      return scenario.replace(/^scenario_/, "").replace(/\.wav$/, "");
+    }
+
+    function buildFrames(entries) {
+      return entries.map((entry) => ({
+        entry,
+        shortName: shortScenarioName(entry.scenario),
+        bounds: computeGeoBounds(entry),
+        drones: entry.drones_used.map((d) => ({
+          id: d.drone_id,
+          lat: d.lat,
+          lon: d.lon
+        })),
+        target: {
+          id: `src-${entry.scenario}`,
+          lat: entry.source.lat,
+          lon: entry.source.lon,
+          type: LABEL_TO_ICON[entry.label] || "unknown",
+          label: entry.label_human || entry.label || "unknown"
+        },
+        cloudLatLon: entry.cloud_latlon || []
+      }));
+    }
+
+    function droneById(drones, id) {
+      return drones.find((d) => d.id === id);
+    }
+
+    function projectDrones(drones, bounds, patrolPhase = 0) {
+      return drones.map((d, i) => {
+        let lat = d.lat;
+        let lon = d.lon;
+        if (patrolPhase > 0) {
+          const wobble = 0.00005;
+          lat += Math.sin(patrolPhase * 1.4 + i * 2.1) * wobble;
+          lon += Math.cos(patrolPhase * 1.1 + i * 1.7) * wobble;
+        }
+        const p = latLonToNorm(lat, lon, bounds);
+        return { id: d.id, x: p.x, y: p.y, lat, lon };
+      });
+    }
+
+    function projectTarget(source, bounds) {
+      const p = latLonToNorm(source.lat, source.lon, bounds);
+      return { ...source, x: p.x, y: p.y };
+    }
+
+    function projectCloud(cloudLatLon, bounds) {
+      return cloudLatLon.map((pt) => latLonToNorm(pt.lat, pt.lon, bounds));
+    }
+
+    function headingDeg(from, to) {
+      const dx = to.x - from.x;
+      const dy = to.y - from.y;
+      if (Math.hypot(dx, dy) < 1e-5) return 0;
+      return (Math.atan2(dx, -dy) * 180) / Math.PI;
+    }
+
+    function latLonToNorm(lat, lon, b) {
+      const x = (lon - b.minLon) / (b.maxLon - b.minLon);
+      const y = 1 - (lat - b.minLat) / (b.maxLat - b.minLat);
+      return { x, y };
+    }
+
+    function drawConfidenceCloud() {
+      if (!state.cloud || state.cloud.length < 3 || state.cloudAlpha <= 0) return;
+      const { w, h } = terrain;
+      const a = state.cloudAlpha;
+      ctx.beginPath();
+      for (let i = 0; i < state.cloud.length; i++) {
+        const p = state.cloud[i];
+        const px = p.x * w;
+        const py = p.y * h;
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.closePath();
+      ctx.fillStyle = `rgba(232, 92, 74, ${0.18 * a})`;
+      ctx.strokeStyle = `rgba(232, 92, 74, ${0.45 * a})`;
+      ctx.lineWidth = 1.5;
+      ctx.fill();
+      ctx.stroke();
+    }
+
     function drawPulses() {
       const { w, h } = terrain;
       const maxR = Math.min(w, h) * 0.35;
@@ -573,7 +823,8 @@
       for (const t of state.targets) {
         const id = `target-${t.id}`;
         active.add(id);
-        const type = ["tank", "soldier", "weapon", "vehicle"].includes(t.type) ? t.type : "unknown";
+        const known = ["tank", "soldier", "weapon", "vehicle", "gunshot", "missile_launch", "drone_hostile"];
+        const type = known.includes(t.type) ? t.type : "unknown";
         upsertEntity(id, type, t.x, t.y, t.label || type.toUpperCase(), "hostile");
       }
       removeStaleEntities(active);
@@ -594,6 +845,7 @@
     function applyPayload(data) {
       if (data.drones) state.drones = data.drones;
       if (data.targets) state.targets = data.targets;
+      if (data.cloud) state.cloud = data.cloud;
       if (data.sonar) {
         for (const s of data.sonar) {
           emitPulse(s.x, s.y, s.color || "rgba(79, 216, 122, 0.5)");
@@ -602,14 +854,257 @@
       if (data.log) addLog(data.log.message, data.log.level || "ok");
     }
 
+    function updateTimelineUI() {
+      const pb = state.playback;
+      const frame = state.frames[pb.index];
+      if (!frame) return;
+      const dur = PHASE_MS[pb.phase];
+      const pct = dur > 0 ? Math.min(100, (pb.phaseT / dur) * 100) : 0;
+      document.getElementById("timelinePhase").textContent =
+        `${PHASE_LABEL[pb.phase]} · event ${pb.index + 1}/${state.frames.length}`;
+      document.getElementById("timelineEvent").textContent =
+        `${frame.shortName} → ${frame.target?.label || "unknown"}`;
+      document.getElementById("timelineBar").style.width = `${pct}%`;
+      const missionSec = Math.floor(pb.missionMs / 1000);
+      const mm = String(Math.floor(missionSec / 60)).padStart(2, "0");
+      const ss = String(missionSec % 60).padStart(2, "0");
+      document.getElementById("coords").textContent =
+        `T+${mm}:${ss} · ${frame.entry.label_human || frame.entry.label} · CEP50 ${frame.entry.cep50_m}m`;
+    }
+
+    function logPlaybackEvent(frame, kind) {
+      const e = frame.entry;
+      if (kind === "listen") {
+        addLog(`Acoustic signal · ${frame.shortName} · listening…`, "warn");
+      } else if (kind === "localize") {
+        addLog(
+          `TDOA · ${e.label_human || e.label} · CEP50 ${e.cep50_m}m · ${frame.shortName}`,
+          "hostile"
+        );
+      }
+    }
+
+    function advancePlaybackPhase() {
+      const pb = state.playback;
+      const i = PHASE_ORDER.indexOf(pb.phase);
+      if (i < PHASE_ORDER.length - 1) {
+        pb.phase = PHASE_ORDER[i + 1];
+        pb.phaseT = 0;
+        pb.patrolT = 0;
+        pb.localizeLogged = false;
+        const frame = state.frames[pb.index];
+        if (pb.phase === "listen") logPlaybackEvent(frame, "listen");
+        if (pb.phase === "localize") logPlaybackEvent(frame, "localize");
+        return;
+      }
+      pb.prevIndex = pb.index;
+      pb.index = (pb.index + 1) % state.frames.length;
+      pb.phase = "transit";
+      pb.phaseT = 0;
+      pb.patrolT = 0;
+      pb.cloudAlpha = 0;
+      pb.localizeLogged = false;
+      state.targets = [];
+      state.cloud = [];
+    }
+
+    function tickPlayback(dt) {
+      if (state.mode !== "localize" || !state.frames.length || state.playback.paused) return;
+
+      entityLayer.classList.add("live-mission");
+
+      const pb = state.playback;
+      pb.missionMs += dt;
+      pb.phaseT += dt;
+
+      const cur = state.frames[pb.index];
+      const prev = state.frames[pb.prevIndex];
+      const dur = PHASE_MS[pb.phase];
+      const t = easeInOut(Math.min(1, pb.phaseT / dur));
+
+      if (pb.phase === "transit") {
+        const bounds = blendBounds(prev.bounds, cur.bounds, t);
+        state.geoBounds = bounds;
+        state.cloudAlpha = 0;
+        state.cloud = [];
+        state.targets = [];
+        state.drones = cur.drones.map((d) => {
+          const from = droneById(prev.drones, d.id) || d;
+          const lat = lerp(from.lat, d.lat, t);
+          const lon = lerp(from.lon, d.lon, t);
+          const p = latLonToNorm(lat, lon, bounds);
+          const pFrom = latLonToNorm(from.lat, from.lon, bounds);
+          const pTo = latLonToNorm(d.lat, d.lon, bounds);
+          return {
+            id: d.id,
+            x: p.x,
+            y: p.y,
+            heading: headingDeg(pFrom, pTo)
+          };
+        });
+        if (Math.random() < 0.04) {
+          for (const d of state.drones) {
+            emitPulse(d.x, d.y, "rgba(79, 216, 122, 0.32)");
+          }
+        }
+      } else if (pb.phase === "listen") {
+        state.geoBounds = cur.bounds;
+        pb.patrolT = (pb.patrolT || 0) + dt * 0.002;
+        state.cloudAlpha = 0;
+        state.cloud = [];
+        state.targets = [];
+        const projected = projectDrones(cur.drones, cur.bounds, pb.patrolT);
+        state.drones = projected.map((d) => ({ id: d.id, x: d.x, y: d.y, heading: 0 }));
+        if (Math.random() < 0.07) {
+          for (const d of state.drones) {
+            emitPulse(d.x, d.y, "rgba(79, 216, 122, 0.42)");
+          }
+        }
+      } else if (pb.phase === "localize") {
+        state.geoBounds = cur.bounds;
+        const projected = projectDrones(cur.drones, cur.bounds);
+        state.drones = projected.map((d) => ({ id: d.id, x: d.x, y: d.y, heading: 0 }));
+        state.cloud = projectCloud(cur.cloudLatLon, cur.bounds);
+        state.cloudAlpha = easeInOut(t);
+        if (t > 0.4) {
+          state.targets = [projectTarget(cur.target, cur.bounds)];
+          if (!pb.localizeLogged) {
+            pb.localizeLogged = true;
+            for (const d of state.drones) {
+              emitPulse(d.x, d.y, "rgba(79, 216, 122, 0.35)");
+            }
+            emitPulse(state.targets[0].x, state.targets[0].y, "rgba(232, 92, 74, 0.5)");
+          }
+        } else {
+          state.targets = [];
+        }
+      } else if (pb.phase === "hold") {
+        state.geoBounds = cur.bounds;
+        const projected = projectDrones(cur.drones, cur.bounds);
+        state.drones = projected.map((d) => ({ id: d.id, x: d.x, y: d.y, heading: 0 }));
+        state.cloud = projectCloud(cur.cloudLatLon, cur.bounds);
+        state.cloudAlpha = 1;
+        state.targets = [projectTarget(cur.target, cur.bounds)];
+        if (Math.random() < 0.02) {
+          emitPulse(state.targets[0].x, state.targets[0].y, "rgba(232, 92, 74, 0.35)");
+        }
+      }
+
+      updateTimelineUI();
+
+      if (pb.phaseT >= dur) {
+        advancePlaybackPhase();
+      }
+    }
+
+    function startPlayback() {
+      const n = state.frames.length;
+      if (!n) return;
+      state.playback = {
+        index: 0,
+        prevIndex: n - 1,
+        phase: "transit",
+        phaseT: 0,
+        paused: false,
+        missionMs: 0,
+        localizeLogged: false
+      };
+      state.cloudAlpha = 0;
+      state.targets = [];
+      state.cloud = [];
+      updateTimelineUI();
+      addLog(`Live mission · ${n} events in sequence`, "ok");
+    }
+
+    function setTimelineLoadError(msg) {
+      document.getElementById("timelinePhase").textContent = "DATA NOT LOADED";
+      document.getElementById("timelineEvent").textContent = msg;
+      document.getElementById("timelineBar").style.width = "0%";
+    }
+
+    async function loadLocalizations() {
+      document.getElementById("timelineEvent").textContent = "Loading…";
+
+      if (location.protocol === "file:") {
+        const msg = "Open http://localhost:8080/ui/index.html (not file://)";
+        setTimelineLoadError(msg);
+        addLog(msg, "warn");
+        return false;
+      }
+
+      let data = null;
+      let usedUrl = "";
+      let lastErr = "";
+
+      try {
+        for (const url of localizationUrls()) {
+          try {
+            const res = await fetch(url);
+            if (!res.ok) {
+              lastErr = `HTTP ${res.status} for ${url}`;
+              continue;
+            }
+            data = await res.json();
+            usedUrl = url;
+            break;
+          } catch (e) {
+            lastErr = `${url}: ${e.message}`;
+          }
+        }
+
+        if (!data || !Array.isArray(data) || !data.length) {
+          const msg = lastErr || "localizations.json not found";
+          setTimelineLoadError("Run: python3 -m http.server 8080");
+          addLog(`Load failed — ${msg}`, "warn");
+          addLog("cd repo root, then: python3 -m http.server 8080", "warn");
+          addLog("Open: http://localhost:8080/ui/index.html", "warn");
+          return false;
+        }
+
+        state.localizations = data;
+        state.frames = buildFrames(data);
+        state.mode = "localize";
+        document.getElementById("btnLocalize").classList.add("active");
+        document.getElementById("btnDemo").classList.remove("active");
+        startPlayback();
+        addLog(`Loaded ${data.length} events from ${usedUrl}`, "ok");
+        setWsStatus(false, "LOCALIZE");
+        return true;
+      } catch (e) {
+        console.error(e);
+        setTimelineLoadError(`Error: ${e.message}`);
+        addLog(`Load error: ${e.message}`, "warn");
+        return false;
+      }
+    }
+
+    function setMode(mode) {
+      state.mode = mode;
+      document.getElementById("btnDemo").classList.toggle("active", mode === "demo");
+      document.getElementById("btnLocalize").classList.toggle("active", mode === "localize");
+      if (mode !== "ws" && state.ws) {
+        state.ws.close();
+        state.ws = null;
+      }
+      if (mode === "demo") {
+        setWsStatus(false, "DEMO");
+        state.cloud = [];
+        entityLayer.classList.remove("live-mission");
+      } else if (mode === "localize") {
+        if (state.frames.length) startPlayback();
+        else loadLocalizations();
+      }
+    }
+
     function connectWs() {
       const url = document.getElementById("wsUrl").value.trim();
       if (state.ws) {
         state.ws.close();
         state.ws = null;
       }
-      state.demoMode = false;
+      setMode("ws");
       document.getElementById("btnDemo").classList.remove("active");
+      document.getElementById("btnLocalize").classList.remove("active");
 
       try {
         state.ws = new WebSocket(url);
@@ -721,25 +1216,28 @@
       state.fps = Math.round(1000 / dt);
       document.getElementById("statFps").textContent = state.fps;
 
-      if (state.demoMode) runDemo(dt);
+      if (state.mode === "demo") runDemo(dt);
+      if (state.mode === "localize") tickPlayback(dt);
 
       drawTerrain();
+      if (state.mode === "localize") drawConfidenceCloud();
       drawPulses();
 
-      // Auto sonar from drones if none in payload
-      if (state.demoMode && state.drones[0] && Math.random() < 0.06) {
+      if (state.mode === "demo" && state.drones[0] && Math.random() < 0.06) {
         const d = state.drones[0];
         emitPulse(d.x, d.y);
       }
 
       renderEntities();
 
-      const d = state.drones[0];
-      if (d) {
-        const lat = (62.41 + (d.y - 0.5) * 0.02).toFixed(3);
-        const lon = (25.75 + (d.x - 0.5) * 0.02).toFixed(3);
-        document.getElementById("coords").textContent =
-          `LAT ${lat}°N · LON ${lon}°E · ALT 42m · HDG ${Math.floor(d.heading || 0)}°`;
+      if (state.mode === "demo") {
+        const d = state.drones[0];
+        if (d) {
+          const lat = (62.41 + (d.y - 0.5) * 0.02).toFixed(3);
+          const lon = (25.75 + (d.x - 0.5) * 0.02).toFixed(3);
+          document.getElementById("coords").textContent =
+            `LAT ${lat}°N · LON ${lon}°E · ALT 42m · HDG ${Math.floor(d.heading || 0)}°`;
+        }
       }
 
       requestAnimationFrame(frame);
@@ -747,8 +1245,8 @@
 
     // ─── Init ──────────────────────────────────────────────────────────────
     buildLegend();
-    addLog("Tactical map ready · DEMO mode", "ok");
-    addLog("Finnish forest sector loaded", "ok");
+    addLog("Tactical map ready", "ok");
+    addLog("LOCALIZE: auto timeline from localizations.json", "ok");
 
     window.addEventListener("resize", resize);
     resize();
@@ -756,15 +1254,26 @@
 
     document.getElementById("btnConnect").addEventListener("click", connectWs);
     document.getElementById("btnDemo").addEventListener("click", () => {
-      state.demoMode = true;
-      if (state.ws) {
-        state.ws.close();
-        state.ws = null;
-      }
-      setWsStatus(false, "DEMO");
-      document.getElementById("btnDemo").classList.add("active");
+      setMode("demo");
       addLog("Demo mode active", "ok");
     });
+    document.getElementById("btnLocalize").addEventListener("click", () => {
+      setMode("localize");
+      addLog("Localize mode active", "ok");
+    });
+    document.getElementById("btnPause").addEventListener("click", () => {
+      state.playback.paused = !state.playback.paused;
+      const btn = document.getElementById("btnPause");
+      btn.textContent = state.playback.paused ? "RESUME" : "PAUSE";
+      btn.classList.toggle("active", state.playback.paused);
+      addLog(state.playback.paused ? "Timeline paused" : "Timeline resumed", "ok");
+    });
+    document.getElementById("btnRetry").addEventListener("click", () => {
+      setMode("localize");
+      loadLocalizations();
+    });
+
+    loadLocalizations();
 
     // ?ws=ws://192.168.1.10:8765 auto-connect
     const params = new URLSearchParams(location.search);
