@@ -1937,6 +1937,37 @@
 
     function lerp(a, b, t) { return a + (b - a) * t; }
 
+    function pointInPolygon(x, y, poly) {
+      let inside = false;
+      for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+        const xi = poly[i].x, yi = poly[i].y;
+        const xj = poly[j].x, yj = poly[j].y;
+        const denom = yj - yi;
+        const intersect = ((yi > y) !== (yj > y)) &&
+          (x < (xj - xi) * (y - yi) / (denom + (denom === 0 ? 1e-12 : 0)) + xi);
+        if (intersect) inside = !inside;
+      }
+      return inside;
+    }
+
+    function reconDroneInRedCloud(rx, ry, toX, toY) {
+      const zone =
+        state.cloud && state.cloud.length >= 3 && state.cloudAlpha > 0
+          ? state.cloud
+          : state.wedge && state.wedge.length >= 3 && state.wedgeAlpha > 0
+            ? state.wedge
+            : null;
+      if (!zone) return false;
+      if (!pointInPolygon(rx, ry, zone)) return false;
+
+      let zoneR = 0;
+      for (const p of zone) {
+        zoneR = Math.max(zoneR, Math.hypot(p.x - toX, p.y - toY));
+      }
+      if (zoneR < 1e-6) return true;
+      return Math.hypot(rx - toX, ry - toY) <= zoneR * 0.42;
+    }
+
     function shortScenarioName(scenario) {
       return scenario.replace(/^scenario_/, "").replace(/\.wav$/, "");
     }
@@ -2794,7 +2825,7 @@
           const fa  = cur.meta.falseAlarm;
           const act = e.recommended_action || "HOLD";
 
-          if (!fa && (act === "RECON" || act === "STRIKE")) {
+          if (fa || act === "RECON" || act === "STRIKE") {
             const tgt = state.targets[0];
             let closest = state.drones[0], bestDist = Infinity;
             for (const d of state.drones) {
@@ -2805,7 +2836,7 @@
               id: closest.id,
               fromX: closest.x, fromY: closest.y,
               toX: tgt.x, toY: tgt.y,
-              t: 0, strike: act === "STRIKE", impacted: false
+              t: 0, strike: !fa && act === "STRIKE", impacted: false
             };
           }
 
@@ -2862,14 +2893,6 @@
             : Math.min(1, ss.respondProgressMs / 14000);
         tickTelemetry(ss, cur, telProgress);
 
-        if (ss.reconDrone && !ss.feedShown) {
-          const act2  = cur.entry.recommended_action || "HOLD";
-          const showAt = act2 === "STRIKE" ? 0.65 : 0.38;
-          if (ss.reconDrone.t >= showAt) {
-            ss.feedShown = true;
-            showReconFeed(cur);
-          }
-        }
         updateFeedTimestamp();
 
         if (ss.reconDrone) {
@@ -2884,6 +2907,10 @@
               ? { ...d, x: rx, y: ry, heading: hdg, recon: !rd.strike, strike: rd.strike }
               : d
           );
+          if (!ss.feedShown && reconDroneInRedCloud(rx, ry, rd.toX, rd.toY)) {
+            ss.feedShown = true;
+            showReconFeed(cur);
+          }
           const trailColor = rd.strike ? "rgba(232,92,74,0.45)" : "rgba(232,168,56,0.4)";
           if (rd.t < 1 && Math.random() < 0.04) emitPulse(rx, ry, trailColor);
 
