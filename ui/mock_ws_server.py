@@ -58,8 +58,28 @@ def _to_norm(lat: float, lon: float, b: dict) -> tuple[float, float]:
     return x, y
 
 
-def entry_to_payload(entry: dict) -> dict:
-    b = _compute_bounds(entry)
+def _compute_global_bounds(entries: list[dict]) -> dict:
+    lats, lons = [], []
+    for entry in entries:
+        for d in entry["drones_used"]:
+            lats.append(d["lat"])
+            lons.append(d["lon"])
+        lats.append(entry["source"]["lat"])
+        lons.append(entry["source"]["lon"])
+        for p in entry.get("cloud_latlon") or []:
+            lats.append(p["lat"])
+            lons.append(p["lon"])
+    pad = 0.00018
+    return {
+        "min_lat": min(lats) - pad,
+        "max_lat": max(lats) + pad,
+        "min_lon": min(lons) - pad,
+        "max_lon": max(lons) - pad,
+    }
+
+
+def entry_to_payload(entry: dict, bounds: dict | None = None) -> dict:
+    b = bounds if bounds is not None else _compute_bounds(entry)
     drones = []
     for d in entry["drones_used"]:
         x, y = _to_norm(d["lat"], d["lon"], b)
@@ -110,19 +130,72 @@ async def stream_demo(websocket) -> None:
         await asyncio.sleep(1 / 30)
 
 
+# Phase durations (seconds) — match ui/index.html PHASE_MS
+_WS_PHASE_S = {"transit": 4.2, "listen": 2.2, "localize": 2.8, "hold": 5.2}
+_WS_PHASE_ORDER = ["transit", "listen", "localize", "hold"]
+
+
 async def stream_localizations(websocket, entries: list[dict]) -> None:
+    n = len(entries)
+    bounds = _compute_global_bounds(entries)
     idx = 0
+    prev_idx = n - 1
+    phase_i = 0
+    phase_t = 0.0
+    tick = 1 / 30
+
     while True:
-        entry = entries[idx % len(entries)]
-        payload = entry_to_payload(entry)
+        entry = entries[idx]
+        prev_entry = entries[prev_idx]
+        phase = _WS_PHASE_ORDER[phase_i]
+        dur = _WS_PHASE_S[phase]
+        t = min(1.0, phase_t / dur)
+        t = t * t * (3 - 2 * t)
+
+        cur = entry_to_payload(entry, bounds)
+        prev = entry_to_payload(prev_entry, bounds)
+
+        if phase == "transit":
+            drones = []
+            for i, d in enumerate(cur["drones"]):
+                f = prev["drones"][i] if i < len(prev["drones"]) else d
+                drones.append({
+                    "id": d["id"],
+                    "x": f["x"] + (d["x"] - f["x"]) * t,
+                    "y": f["y"] + (d["y"] - f["y"]) * t,
+                    "heading": 0,
+                })
+            payload = {"drones": drones, "targets": [], "cloud": []}
+        elif phase == "listen":
+            payload = {"drones": cur["drones"], "targets": [], "cloud": []}
+        elif phase == "localize":
+            payload = {
+                "drones": cur["drones"],
+                "targets": cur["targets"] if t > 0.4 else [],
+                "cloud": cur["cloud"] if t > 0.2 else [],
+            }
+        else:
+            payload = cur
+
         short = entry["scenario"].replace("scenario_", "").replace(".wav", "")
-        payload["log"] = {
-            "message": f"{entry.get('label_human', entry['label'])} · {short} · CEP50 {entry['cep50_m']}m",
-            "level": "hostile",
-        }
+        if phase == "listen" and phase_t < tick * 1.5:
+            payload["log"] = {"message": f"Segnale · {short}", "level": "warn"}
+        elif phase == "localize" and 0.4 * dur < phase_t < 0.4 * dur + tick:
+            payload["log"] = {
+                "message": f"{entry.get('label_human', entry['label'])} · CEP50 {entry['cep50_m']}m",
+                "level": "hostile",
+            }
+
         await websocket.send(json.dumps(payload))
-        idx += 1
-        await asyncio.sleep(4.0)
+        phase_t += tick
+        if phase_t >= dur:
+            phase_t = 0.0
+            phase_i += 1
+            if phase_i >= len(_WS_PHASE_ORDER):
+                phase_i = 0
+                prev_idx = idx
+                idx = (idx + 1) % n
+        await asyncio.sleep(tick)
 
 
 async def stream(websocket) -> None:
