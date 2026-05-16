@@ -6,7 +6,7 @@ Usage (from repo root):
   conda activate audio_env
   python detection/detect_audio.py data/scenarios/scenario_tank_mix.wav
   python detection/detect_audio.py --folder data/scenarios
-  python detection/detect_audio.py --folder data/scenarios -o output/events.json
+  python detection/detect_audio.py --folder data/scenarios -o detection/output/events.json
   python detection/detect_audio.py --benchmark
 """
 
@@ -28,7 +28,9 @@ WINDOW_SIZE = 0.5
 HOP_SIZE = 0.25
 SR = 22050
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+DETECTION_DIR = Path(__file__).resolve().parent
+REPO_ROOT = DETECTION_DIR.parent
+OUTPUT_DIR = DETECTION_DIR / "output"
 DATA_DIR = REPO_ROOT / "data"
 SAMPLES_DIR = DATA_DIR / "samples"
 DRONE_REF_PATH = SAMPLES_DIR / "drone" / "uas_drone_pass_dcpoke.wav"
@@ -640,7 +642,7 @@ def main():
     p.add_argument("--json", action="store_true", help="print JSON to stdout")
     p.add_argument(
         "-o", "--output",
-        help="write JSON file (with --folder --json default: <folder>/detections.json)",
+        help="write JSON file (default with --folder: detection/output/events.json)",
     )
     p.add_argument("--drone-id", default="drone_1", help="drone ID for TDOA / WebSocket payload")
     p.add_argument("--benchmark", action="store_true", help="run DCASE, ESC-50, negative, samples tests")
@@ -666,7 +668,7 @@ def main():
         if not args.benchmark:
             print("Usage: python detection/detect_audio.py <file.wav> [more files ...]", file=sys.stderr)
             print("       python detection/detect_audio.py --folder data/scenarios", file=sys.stderr)
-            print("       python detection/detect_audio.py --folder data/scenarios -o output/events.json", file=sys.stderr)
+            print("       python detection/detect_audio.py --folder data/scenarios -o detection/output/events.json", file=sys.stderr)
             print("       python detection/detect_audio.py --benchmark", file=sys.stderr)
             sys.exit(1)
         return
@@ -677,8 +679,10 @@ def main():
     out_path: Path | None = None
     if args.output:
         out_path = Path(args.output)
-    elif args.folder and args.json:
-        out_path = Path(args.folder) / "detections.json"
+        if not out_path.is_absolute():
+            out_path = REPO_ROOT / out_path
+    elif args.folder:
+        out_path = OUTPUT_DIR / "events.json"
 
     if out_path is not None:
         written = write_results_json(results, out_path)
