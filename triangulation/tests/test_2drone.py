@@ -56,23 +56,23 @@ class TestHyperbola:
         assert hyperbola(p1, p2, 5.0) is None
 
     def test_branch_selection_dd_positive(self):
-        """dd > 0 → source closer to p1 (left branch) → arc x centroid < 0 in canonical frame."""
+        """dd > 0 → |source-p1| > |source-p2| → source closer to p2 → arc x centroid > 100."""
         p1 = np.array([0.0, 0.0])
         p2 = np.array([200.0, 0.0])
-        dd = 40.0   # p1 hears first → branch near p1 (x < 100)
+        dd = 40.0   # source closer to p2 → branch on p2 side (x > 100)
         arc = hyperbola(p1, p2, dd)
         assert arc is not None
-        # Midpoint of arc should be on the p1 side (x < mid of p1,p2 = 100)
-        assert arc[:, 0].mean() < 100.0
+        # Arc centroid should be on the p2 side (x > mid of p1,p2 = 100)
+        assert arc[:, 0].mean() > 100.0
 
     def test_branch_selection_dd_negative(self):
-        """dd < 0 → source closer to p2 (right branch) → arc x centroid > 100."""
+        """dd < 0 → |source-p1| < |source-p2| → source closer to p1 → arc x centroid < 100."""
         p1 = np.array([0.0, 0.0])
         p2 = np.array([200.0, 0.0])
-        dd = -40.0  # p2 hears first → branch near p2 (x > 100)
+        dd = -40.0  # source closer to p1 → branch on p1 side (x < 100)
         arc = hyperbola(p1, p2, dd)
         assert arc is not None
-        assert arc[:, 0].mean() > 100.0
+        assert arc[:, 0].mean() < 100.0
 
     def test_rotated_pair(self):
         """Drones on a diagonal — arc should still be geometrically valid."""

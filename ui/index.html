@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Tactical Edge — Live Map</title>
+  <title>Triangle — Live Map</title>
 
   <!-- Leaflet -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
@@ -84,6 +84,9 @@
       border: 1px solid var(--border);
       background: rgba(0, 0, 0, 0.3);
     }
+
+    /* WebSocket panel + CONNECT/DEMO — hidden (use loadLocalizations on startup) */
+    .ws-dev-only { display: none !important; }
 
     .status-dot {
       width: 8px;
@@ -302,6 +305,41 @@
     }
     .entity.drone.strike-drone .label { color: var(--hostile); }
 
+    /* Session 13 — killed drone */
+    .entity.drone.drone-killed svg { opacity: 0.25; filter: grayscale(1); }
+    .entity.drone.drone-killed .label { color: #555; text-decoration: line-through; opacity: 0.6; }
+
+    /* Kill pills section */
+    .kill-section { margin-bottom: 8px; }
+    .kill-section h3 { font-size: 10px; letter-spacing: .08em; color: var(--text-dim);
+      text-transform: uppercase; margin: 0 0 6px; }
+    .kill-pills { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 6px; }
+    .kill-pill {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 3px 8px; border-radius: 4px; font-size: 11px; font-family: monospace;
+      cursor: pointer; border: 1px solid rgba(79,216,122,0.35);
+      background: rgba(79,216,122,0.08); color: var(--accent); transition: all 0.15s;
+    }
+    .kill-pill:hover { border-color: var(--accent); background: rgba(79,216,122,0.16); }
+    .kill-pill.killed {
+      border-color: rgba(232,92,74,0.55); background: rgba(232,92,74,0.12);
+      color: var(--hostile); text-decoration: line-through; opacity: 0.85;
+    }
+    .kill-pill.killed:hover { opacity: 1; background: rgba(232,92,74,0.2); }
+    .kill-reset-btn {
+      font-size: 10px; padding: 2px 8px; border-radius: 3px; cursor: pointer;
+      border: 1px solid rgba(100,100,100,0.4); background: transparent;
+      color: var(--text-dim); letter-spacing: .05em;
+    }
+    .kill-reset-btn:hover { color: var(--text); border-color: var(--text-dim); }
+    #insufficientBanner {
+      display: none; margin: 6px 0; padding: 6px 10px; border-radius: 4px;
+      font-size: 11px; font-weight: 600; letter-spacing: .06em; text-align: center;
+      background: rgba(232,92,74,0.15); border: 1px solid rgba(232,92,74,0.5);
+      color: var(--hostile);
+    }
+    #insufficientBanner.visible { display: block; }
+
     /* ── Neutralized target ───────────────────────────────────── */
     @keyframes neutralize {
       0%   { opacity: 1; transform: translate(-50%,-50%) scale(1); }
@@ -368,7 +406,7 @@
     /* ── ROE banner ───────────────────────────────────────────── */
     #roeBanner {
       position: absolute;
-      bottom: 36px;
+      bottom: 62px;
       left: 50%;
       transform: translateX(-50%);
       z-index: 10;
@@ -1054,8 +1092,8 @@
     .scenario-cards.ready .sc-sandbox-btn { display: inline-block; }
 
     /* entity-layer cursor override in sandbox mode */
-    .entity-layer.sandbox-mode { cursor: crosshair; }
-    .entity-layer.sandbox-mode .entity { cursor: grab; }
+    .entity-layer.sandbox-mode { cursor: crosshair; pointer-events: auto; }
+    .entity-layer.sandbox-mode .entity { cursor: grab; pointer-events: auto; }
     .entity-layer.sandbox-mode .entity:active { cursor: grabbing; }
 
     /* error line drawn via canvas in sandbox — no extra CSS needed */
@@ -1259,15 +1297,139 @@
       letter-spacing: 0.06em;
     }
     .mp-reset:hover { color: var(--text); border-color: var(--accent); }
+
+    /* ── Operator guide (judges) ─────────────────────────────────── */
+    .guide-btn {
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.65rem;
+      letter-spacing: 0.1em;
+      padding: 6px 12px;
+      border-radius: 3px;
+      border: 1px solid rgba(72,160,98,0.45);
+      background: rgba(79,216,122,0.12);
+      color: var(--accent);
+      cursor: pointer;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .guide-btn:hover { background: rgba(79,216,122,0.22); }
+
+    #tourRoot {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 9000;
+      pointer-events: none;
+    }
+    #tourRoot.active { display: block; pointer-events: auto; }
+
+    #tourSpotlight {
+      display: none;
+      position: fixed;
+      z-index: 9001;
+      border: 2px solid var(--accent);
+      border-radius: 5px;
+      box-shadow: 0 0 0 9999px rgba(0, 8, 4, 0.82);
+      transition: top 0.28s ease, left 0.28s ease, width 0.28s ease, height 0.28s ease;
+      pointer-events: none;
+    }
+    #tourSpotlight.visible { display: block; }
+
+    #tourTooltip {
+      position: fixed;
+      z-index: 9002;
+      width: min(340px, calc(100vw - 24px));
+      padding: 14px 16px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+      pointer-events: auto;
+    }
+    .tour-head-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 6px;
+    }
+    .tour-step-badge {
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.58rem;
+      letter-spacing: 0.1em;
+      color: var(--warn);
+    }
+    .tour-skip-top,
+    #tourSkip {
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.58rem;
+      letter-spacing: 0.06em;
+      padding: 4px 8px;
+      border-radius: 3px;
+      cursor: pointer;
+      border: 1px solid rgba(106, 154, 120, 0.4);
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--text-dim);
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .tour-skip-top:hover,
+    #tourSkip:hover {
+      color: var(--text);
+      border-color: rgba(106, 154, 120, 0.65);
+      background: rgba(255, 255, 255, 0.1);
+    }
+    #tourTitle {
+      font-size: 0.82rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 8px;
+    }
+    #tourBody {
+      font-size: 0.92rem;
+      line-height: 1.45;
+      color: var(--text);
+      margin-bottom: 12px;
+    }
+    #tourBody strong { color: var(--accent); }
+    .tour-actions {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+    }
+    .tour-actions-right { display: flex; gap: 6px; margin-left: auto; }
+    .tour-actions button {
+      font-family: "JetBrains Mono", monospace;
+      font-size: 0.6rem;
+      letter-spacing: 0.06em;
+      padding: 7px 12px;
+      border-radius: 3px;
+      cursor: pointer;
+      border: 1px solid rgba(72,160,98,0.35);
+      background: rgba(255,255,255,0.05);
+      color: var(--text-dim);
+    }
+    .tour-actions button:hover { color: var(--text); border-color: var(--accent); }
+    .tour-actions button:disabled { opacity: 0.35; cursor: default; }
+    #tourNext {
+      background: rgba(79,216,122,0.22);
+      color: var(--accent);
+      border-color: var(--accent);
+    }
+    #tourNext:hover { background: rgba(79,216,122,0.35); }
   </style>
 </head>
 <body>
   <div class="hud">
     <header>
       <div>
-        <h1>Tactical Edge — Live Map</h1>
+        <h1>Triangle — Live Map</h1>
         <p class="subtitle">FINNISH FOREST SECTOR · GPS-DENIED · REAL-TIME</p>
       </div>
+
+      <button type="button" class="guide-btn" id="btnGuide" title="Step-by-step tour (?)">GUIDE</button>
 
       <!-- Session 16 — Mesh bandwidth strip (click to open popover) -->
       <div class="mesh-strip" id="meshStrip" title="Click to inspect mesh compression detail">
@@ -1275,11 +1437,31 @@
         <div class="mesh-strip-row2" id="bwRow2">TOTAL — · — saved · loading…</div>
       </div>
 
-      <div class="status-pill">
+      <div class="status-pill ws-dev-only">
         <div class="status-dot" id="wsStatus"></div>
         <span id="wsLabel">DISCONNECTED</span>
       </div>
     </header>
+
+    <!-- Step-by-step operator tour (judges) -->
+    <div id="tourRoot" aria-hidden="true">
+      <div id="tourSpotlight"></div>
+      <div id="tourTooltip" role="dialog" aria-labelledby="tourTitle">
+        <div class="tour-head-row">
+          <div class="tour-step-badge" id="tourProgress">1 / 9</div>
+          <button type="button" class="tour-skip-top" id="tourSkipTop" title="End tutorial and start demo">Skip tutorial</button>
+        </div>
+        <h2 id="tourTitle">Welcome</h2>
+        <p id="tourBody"></p>
+        <div class="tour-actions">
+          <button type="button" id="tourSkip">Skip tutorial</button>
+          <div class="tour-actions-right">
+            <button type="button" id="tourBack">Back</button>
+            <button type="button" id="tourNext">Next</button>
+          </div>
+        </div>
+      </div>
+    </div>
 
     <!-- Session 16 — Mesh bandwidth popover -->
     <div id="meshPopover" role="dialog" aria-modal="true">
@@ -1341,12 +1523,14 @@
         <div class="sb-stat" id="sbStat">Drag drones &amp; source to compute live fix</div>
       </div>
 
-      <h2 style="margin-top: 14px">WebSocket</h2>
-      <input type="text" id="wsUrl" value="ws://localhost:8765" placeholder="ws://host:port" />
-      <div class="btn-row">
-        <button type="button" id="btnConnect">CONNECT</button>
-        <button type="button" id="btnDemo">DEMO</button>
-        <button type="button" id="btnLocalize" class="active">LOCALIZE</button>
+      <div class="ws-dev-only" id="wsDevPanel">
+        <h2 style="margin-top: 14px">WebSocket</h2>
+        <input type="text" id="wsUrl" value="ws://localhost:8765" placeholder="ws://host:port" />
+        <div class="btn-row">
+          <button type="button" id="btnConnect">CONNECT</button>
+          <button type="button" id="btnDemo">DEMO</button>
+          <button type="button" id="btnLocalize" class="active">LOCALIZE</button>
+        </div>
       </div>
     </aside>
 
@@ -1391,7 +1575,7 @@
       <div class="phase-controls" id="phaseControls">
         <button class="phase-btn" id="btnPrev"      title="Previous phase [←]">⏪ PREV</button>
         <button class="phase-btn" id="btnNextPhase" title="Next phase [→]">▶ NEXT</button>
-        <button class="phase-btn" id="btnAuto"      title="Toggle auto-advance [Space]">⏵ AUTO</button>
+        <button class="phase-btn auto-active" id="btnAuto" title="Toggle auto-advance [Space]">⏵ AUTO</button>
         <button class="phase-btn" id="btnReset"     title="Reset scenario [R]">⟲ RESET</button>
         <div class="phase-info" id="phaseInfo">PATROL · standby · 1/5</div>
       </div>
@@ -1445,6 +1629,12 @@
           </svg>
           <div class="money-chart-label">σ_t (ms) vs CEP50 (m) — current operating point ●</div>
         </div>
+      </div>
+      <div class="kill-section" id="killSection" style="display:none">
+        <h3>Drone status <span style="opacity:.5;font-size:9px">[K] toggle</span></h3>
+        <div class="kill-pills" id="killPills"></div>
+        <div id="insufficientBanner">⊘ INSUFFICIENT SENSORS — restore drones to resume fix</div>
+        <button class="kill-reset-btn" id="killResetBtn" onclick="resetKills()">RESTORE ALL</button>
       </div>
       <h2 style="margin-top: 6px">Event log</h2>
       <div class="log" id="eventLog"></div>
@@ -1725,7 +1915,7 @@
       step: 0,            // 0 = PATROL … 5 = COMPLETE
       stepT: 0,           // ms elapsed in current step animation
       stepProgress: 0,    // 0..1 within current step
-      autoplay: false,
+      autoplay: true,
       paused: false,
       completed: false,   // true once "complete" phase fires — freezes tickStep
       missionMs: 0,
@@ -1742,7 +1932,9 @@
       sandboxError_m: null,   // distance truth→estimate in metres
       sandboxFetching: false,
       sandboxFetchTimer: 0,   // debounce countdown (ms)
-      sandboxLabel: "gunshot"
+      sandboxLabel: "gunshot",
+      // Session 13 — kill-drone
+      killedDroneIds: new Set()
     };
 
     // ── Session 16 — Mesh bandwidth session state ─────────────────────────
@@ -2156,6 +2348,7 @@
           if (d.heading != null) el.dataset.heading = d.heading;
           el.classList.toggle("recon-drone",  !!d.recon);
           el.classList.toggle("strike-drone", !!d.strike);
+          el.classList.toggle("drone-killed", state.killedDroneIds.has(d.id));
         }
       }
       for (const t of state.targets) {
@@ -2253,6 +2446,26 @@
       const el = document.getElementById("roeBanner");
       el.className = "";
       el.textContent = "";
+    }
+
+    function updateRoeFromEntry(e, meta) {
+      const pid = PHASES[state.step]?.id;
+      if (!["decide", "respond", "complete"].includes(pid)) return;
+      const fa  = meta?.falseAlarm;
+      const act = e.recommended_action || "HOLD";
+      if (fa) {
+        showRoeBanner("⚠ FALSE ALARM — NO ACTION TAKEN", "roe-false");
+      } else if (act === "STRIKE") {
+        showRoeBanner(`⚔ STRIKE AUTHORIZED · ${e.label_human || e.label}`, "roe-hold");
+      } else if (act === "RECON") {
+        showRoeBanner(`▶ RECON ORDERED · ${e.label_human || e.label}`, "roe-recon");
+      } else if (act === "SEARCH") {
+        showRoeBanner(`⊹ SEARCH ORDERED · CEP50 ${e.cep50_m}m — SWEEPING SECTOR`, "roe-recon");
+      } else if (act === "INSUFFICIENT_SENSORS") {
+        showRoeBanner("⊘ INSUFFICIENT SENSORS · restore drones to resume fix", "roe-hold");
+      } else {
+        showRoeBanner(`✕ HOLD FIRE · CEP50 ${e.cep50_m}m — GEOMETRY INSUFFICIENT`, "roe-hold");
+      }
     }
 
     // ─── Camera feed helpers ──────────────────────────────────────────────
@@ -2420,6 +2633,7 @@
       state.wedge           = [];
       state.wedgeAlpha      = 0;
       state.fixKind         = "point";
+      state.killedDroneIds  = new Set();
       const cur = state.frames[i];
       state.geoBounds = cur.bounds;
       syncMapView(cur.bounds);
@@ -2427,6 +2641,7 @@
       updateScenarioCards();
       updatePhaseUI();
       syncSlidersToScenario();
+      renderKillPills();
       addLog(`Scenario ${i + 1}: ${cur.meta.title}`, "ok");
       // Session 16: update mesh bandwidth strip for this scenario
       fetchBandwidth(cur.entry ? cur.entry.scenario : null);
@@ -2441,10 +2656,12 @@
       clearTargetStyles();
       hideRoeBanner();
       hideReconFeed();
+      state.killedDroneIds  = new Set();
+      renderKillPills();
       state.completed       = false;
       state.cloudFromSlider = false;
-      state.autoplay        = false;   // manual reset returns to manual mode
-      document.getElementById("btnAuto").classList.remove("auto-active");
+      state.autoplay        = true;
+      document.getElementById("btnAuto").classList.add("auto-active");
       state.step            = 0;
       state.stepT           = 0;
       state.stepProgress    = 0;
@@ -2635,6 +2852,218 @@
       if (bwSession.popoverOpen) renderBwPopover();
     }
 
+    // ── Step-by-step operator tour (judges) ───────────────────────────────────
+    const GUIDE_SEEN_KEY = "triangle_guide_seen";
+    let tourIndex = 0;
+    let tourAutoplaySaved = null;
+    let tourPendingScenario = false;
+
+    function shouldAutoStartTour() {
+      const params = new URLSearchParams(location.search);
+      if (params.get("notour") === "1") return false;
+      return true;
+    }
+
+    const TOUR_STEPS = [
+      {
+        title: "Welcome to Triangle",
+        body: "<strong>Triangle</strong> simulates a GPS-denied UAV swarm: acoustic detection → TDOA fix → ROE decision on a live map. Use <strong>Next</strong> or <kbd>Tab</kbd> for the next step.",
+        target: null,
+        placement: "center",
+      },
+      {
+        title: "Five simulations",
+        body: "Click any <strong>scenario card</strong> to run a different mission (missile, tank, gunfire, false alarm, poor geometry). Scenario 1 auto-starts on load.",
+        target: "#scenarioCards",
+        placement: "right",
+      },
+      {
+        title: "Mission phases",
+        body: "Dots show progress: <strong>PATROL → DETECT → LOCALIZE → DECIDE → RESPOND → COMPLETE</strong>. Watch the red cloud, ROE banner, and recon camera feed during the run.",
+        target: "#phaseStepper",
+        placement: "right",
+      },
+      {
+        title: "Playback controls",
+        body: "<strong>▶ NEXT</strong> / <strong>⏪ PREV</strong> step manually. <strong>⏵ AUTO</strong> advances phases (on by default; <kbd>Space</kbd> toggles). <strong>⟲ RESET</strong> replays the scenario.",
+        target: "#phaseControls",
+        placement: "top",
+      },
+      {
+        title: "Live map",
+        body: "Drones triangulate the threat. Look for the <strong>red confidence cloud</strong>, <strong>ROE banner</strong>, and <strong>camera still</strong> when the recon UAV enters the cloud.",
+        target: ".map-wrap",
+        placement: "top",
+      },
+      {
+        title: "Mesh bandwidth",
+        body: "Click the header strip to compare <strong>32-byte mesh frames</strong> vs bulky JSON and see bytes saved on the wire.",
+        target: "#meshStrip",
+        placement: "bottom",
+      },
+      {
+        title: "Uncertainty sliders",
+        body: "Drag <strong>σ_t</strong> (timing) and <strong>σ_pos</strong> (GPS denial) to see CEP50, GDOP, and recommended action update live.",
+        target: ".sigma-section",
+        placement: "left",
+      },
+      {
+        title: "Sandbox (optional)",
+        body: "<strong>ENTER SANDBOX</strong> or the <strong>⊞</strong> on a card — drag drones and the threat source to recompute the fix. <kbd>Esc</kbd> to exit.",
+        target: "#sbCard",
+        placement: "right",
+      },
+      {
+        title: "You're ready",
+        body: "Press <strong>Exit</strong> (or <kbd>Tab</kbd>) to explore the demo, or click another scenario card anytime. Reopen this tour with <strong>GUIDE</strong> or <kbd>?</kbd>.",
+        target: "#btnGuide",
+        placement: "bottom",
+      },
+    ];
+
+    function tourEl(selector) {
+      if (!selector) return null;
+      return document.querySelector(selector);
+    }
+
+    function placeTourTooltip(rect, placement) {
+      const tip = document.getElementById("tourTooltip");
+      if (!tip) return;
+      const margin = 14;
+      const tw = tip.offsetWidth;
+      const th = tip.offsetHeight;
+      let top, left;
+      if (!rect || placement === "center") {
+        top = Math.max(12, (window.innerHeight - th) / 2);
+        left = Math.max(12, (window.innerWidth - tw) / 2);
+      } else {
+        switch (placement) {
+          case "top":
+            top = rect.top - th - margin;
+            left = rect.left + rect.width / 2 - tw / 2;
+            break;
+          case "left":
+            top = rect.top + rect.height / 2 - th / 2;
+            left = rect.left - tw - margin;
+            break;
+          case "right":
+            top = rect.top + rect.height / 2 - th / 2;
+            left = rect.right + margin;
+            break;
+          default:
+            top = rect.bottom + margin;
+            left = rect.left + rect.width / 2 - tw / 2;
+        }
+        top = Math.max(10, Math.min(top, window.innerHeight - th - 10));
+        left = Math.max(10, Math.min(left, window.innerWidth - tw - 10));
+      }
+      tip.style.top  = `${top}px`;
+      tip.style.left = `${left}px`;
+    }
+
+    function renderTourStep() {
+      while (tourIndex < TOUR_STEPS.length) {
+        const step = TOUR_STEPS[tourIndex];
+        const el = tourEl(step.target);
+        if (step.target && (!el || (el.offsetParent === null && el !== document.body))) {
+          tourIndex++;
+          continue;
+        }
+        const spot = document.getElementById("tourSpotlight");
+        document.getElementById("tourTitle").textContent = step.title;
+        document.getElementById("tourBody").innerHTML = step.body;
+        document.getElementById("tourProgress").textContent =
+          `${tourIndex + 1} / ${TOUR_STEPS.length}`;
+        document.getElementById("tourBack").disabled = tourIndex === 0;
+        const isLast = tourIndex === TOUR_STEPS.length - 1;
+        document.getElementById("tourNext").textContent = isLast ? "Exit" : "Next";
+
+        if (el) {
+          el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+          const pad = 10;
+          const r = el.getBoundingClientRect();
+          spot.classList.add("visible");
+          spot.style.top    = `${r.top - pad}px`;
+          spot.style.left   = `${r.left - pad}px`;
+          spot.style.width  = `${r.width + pad * 2}px`;
+          spot.style.height = `${r.height + pad * 2}px`;
+          requestAnimationFrame(() => placeTourTooltip(r, step.placement));
+        } else {
+          spot.classList.remove("visible");
+          requestAnimationFrame(() => placeTourTooltip(null, "center"));
+        }
+        return;
+      }
+      endTour(true);
+    }
+
+    function startTour() {
+      if (bwSession.popoverOpen) closeMeshPopover();
+      tourIndex = 0;
+      tourAutoplaySaved = state.autoplay;
+      state.autoplay = false;
+      document.getElementById("btnAuto")?.classList.remove("auto-active");
+      const root = document.getElementById("tourRoot");
+      root.classList.add("active");
+      root.setAttribute("aria-hidden", "false");
+      renderTourStep();
+    }
+
+    function endTour(markSeen = true) {
+      const root = document.getElementById("tourRoot");
+      root.classList.remove("active");
+      root.setAttribute("aria-hidden", "true");
+      document.getElementById("tourSpotlight").classList.remove("visible");
+      if (tourPendingScenario) {
+        tourPendingScenario = false;
+        setScenario(0);
+      } else if (tourAutoplaySaved !== null) {
+        state.autoplay = tourAutoplaySaved;
+        document.getElementById("btnAuto")?.classList.toggle("auto-active", state.autoplay);
+        tourAutoplaySaved = null;
+      }
+      if (markSeen) {
+        try { localStorage.setItem(GUIDE_SEEN_KEY, "1"); } catch (_) {}
+      }
+    }
+
+    function isGuideOpen() {
+      return document.getElementById("tourRoot")?.classList.contains("active");
+    }
+
+    function openGuide() { startTour(); }
+    function closeGuide(markSeen = true) { endTour(markSeen); }
+
+    function launchTourWhenReady() {
+      setTimeout(() => startTour(), 0);
+    }
+
+    function tourNext() {
+      if (tourIndex < TOUR_STEPS.length - 1) {
+        tourIndex++;
+        renderTourStep();
+      } else {
+        endTour(true);
+      }
+    }
+
+    function tourBack() {
+      if (tourIndex > 0) {
+        tourIndex--;
+        renderTourStep();
+      }
+    }
+
+    document.getElementById("btnGuide").addEventListener("click", startTour);
+    function skipTutorial() { endTour(true); }
+    document.getElementById("tourSkip").addEventListener("click", skipTutorial);
+    document.getElementById("tourSkipTop").addEventListener("click", skipTutorial);
+    document.getElementById("tourNext").addEventListener("click", tourNext);
+    document.getElementById("tourBack").addEventListener("click", tourBack);
+    window.addEventListener("resize", () => {
+      if (isGuideOpen()) renderTourStep();
+    });
+
     // Wire up popover open/close
     document.getElementById("meshStrip").addEventListener("click", () => {
       if (bwSession.popoverOpen) closeMeshPopover();
@@ -2808,6 +3237,8 @@
             showRoeBanner(`▶ RECON ORDERED · ${e.label_human || e.label}`, "roe-recon");
           } else if (act === "SEARCH") {
             showRoeBanner(`⊹ SEARCH ORDERED · CEP50 ${e.cep50_m}m — SWEEPING SECTOR`, "roe-recon");
+          } else if (act === "INSUFFICIENT_SENSORS") {
+            showRoeBanner("⊘ INSUFFICIENT SENSORS · restore drones to resume fix", "roe-hold");
           } else {
             showRoeBanner(`✕ HOLD FIRE · CEP50 ${e.cep50_m}m — GEOMETRY INSUFFICIENT`, "roe-hold");
           }
@@ -3028,7 +3459,7 @@
       state.step          = 0;
       state.stepT         = 0;
       state.stepProgress  = 0;
-      state.autoplay      = false;
+      state.autoplay      = true;
       state.paused        = false;
       state.missionMs     = 0;
       state.stepState     = {};
@@ -3037,11 +3468,20 @@
       state.cloud         = [];
       state.geoBounds     = state.frames[0].bounds;
       syncMapView(state.frames[0].bounds);
-      showScenarioIntro(state.frames[0], 0, n);
       buildScenarioCards();
       updatePhaseUI();
       syncSlidersToScenario();
-      addLog(`Mission ready · ${n} scenarios · click a card or press → to begin`, "ok");
+      const btnAuto = document.getElementById("btnAuto");
+      if (btnAuto) btnAuto.classList.add("auto-active");
+      if (shouldAutoStartTour()) {
+        tourPendingScenario = true;
+        showScenarioIntro(state.frames[0], 0, n);
+        addLog(`Mission ready · ${n} scenarios · guided tour`, "ok");
+        launchTourWhenReady();
+      } else {
+        addLog(`Mission ready · ${n} scenarios · AUTO on`, "ok");
+        setScenario(0);
+      }
     }
 
     // ─── Session 8 — σ sliders + live recompute ──────────────────────────
@@ -3071,6 +3511,45 @@
     // Debounce timer
     let _sigDebounce = null;
 
+    function apiBase() {
+      if (location.protocol === "file:") return null;
+      return location.origin;
+    }
+
+    function applyFixFromCur(cur, { forceVisible = false } = {}) {
+      if (!cur) return;
+      cur.fixKind         = cur.entry.fix_kind         ?? cur.fixKind         ?? "point";
+      cur.cloudLatLon     = cur.entry.cloud_latlon     ?? cur.cloudLatLon     ?? [];
+      cur.hyperbolaLatLon = cur.entry.hyperbola_latlon ?? cur.hyperbolaLatLon ?? [];
+      cur.wedgeLatLon     = cur.entry.wedge_latlon     ?? cur.wedgeLatLon     ?? [];
+
+      state.fixKind = cur.fixKind;
+      const pid     = PHASES[state.step]?.id;
+      const visible = forceVisible || ["localize", "decide", "respond", "complete"].includes(pid);
+      const alpha   = visible ? 1 : Math.max(state.cloudAlpha, 0.85);
+
+      if (state.fixKind === "bearing") {
+        state.hyperbola  = projectCloud(cur.hyperbolaLatLon, cur.bounds);
+        state.wedge      = projectCloud(cur.wedgeLatLon, cur.bounds);
+        state.wedgeAlpha = alpha;
+        state.cloud      = [];
+        state.cloudAlpha = 0;
+      } else if (state.fixKind === "none") {
+        state.hyperbola  = [];
+        state.wedge      = [];
+        state.wedgeAlpha = 0;
+        state.cloud      = [];
+        state.cloudAlpha = 0;
+      } else {
+        state.hyperbola  = [];
+        state.wedge      = [];
+        state.wedgeAlpha = 0;
+        state.cloud      = projectCloud(cur.cloudLatLon, cur.bounds);
+        state.cloudAlpha = cur.cloudLatLon.length ? alpha : 0;
+      }
+      state.cloudFromSlider = state.killedDroneIds.size > 0;
+    }
+
     // ── Live frontend cloud scaling (no backend needed) ──────────────────
     // Scales the pre-loaded cloud around the source position by the ratio
     // of the new sigma_pos to the scenario's base sigma_pos.
@@ -3099,7 +3578,7 @@
       document.getElementById("sigPSlider").dataset.sigmaPosM = sp;
       // Immediate live update — no backend, no debounce
       applySliderCloud(sp);
-      // Backend recompute for CEP / recommended-action numbers (localhost only)
+      // Backend recompute for CEP / recommended-action numbers
       setSliderLoading(true);
       clearTimeout(_sigDebounce);
       _sigDebounce = setTimeout(() => recomputeCurrentScenario(st, sp), 120);
@@ -3116,14 +3595,15 @@
       if (!state.frames.length) return;
       const cur = state.frames[state.scenarioIndex];
       const scenarioId = cur.entry.scenario;
-      const base = (location.hostname === "127.0.0.1" || location.hostname === "localhost")
-        ? `${location.origin}`
-        : null;
+      const base = apiBase();
       if (!base) { setSliderLoading(false); return; }
 
       try {
+        const killedParam = state.killedDroneIds.size
+          ? `&killed=${[...state.killedDroneIds].join(",")}`
+          : "";
         const url = `${base}/api/scenarios/${encodeURIComponent(scenarioId)}` +
-                    `?sigma_t_ms=${sigT.toFixed(5)}&sigma_pos_m=${sigP.toFixed(3)}`;
+                    `?sigma_t_ms=${sigT.toFixed(5)}&sigma_pos_m=${sigP.toFixed(3)}${killedParam}`;
         const res = await fetch(url);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
@@ -3138,21 +3618,100 @@
           recommended_action: data.recommended_action,
           recommended_action_reason: data.recommended_action_reason,
           localization_confidence: data.localization_confidence,
+          fix_kind:           data.fix_kind ?? cur.entry.fix_kind,
+          hyperbola_latlon:   data.hyperbola_latlon ?? cur.entry.hyperbola_latlon,
+          wedge_latlon:       data.wedge_latlon      ?? cur.entry.wedge_latlon,
         };
-        cur.cloudLatLon = data.cloud_latlon || [];
-        // If in localize/decide/respond/complete phase — re-project cloud
-        const pid = PHASES[state.step].id;
-        if (["localize","decide","respond","complete"].includes(pid)) {
-          state.cloud      = projectCloud(cur.cloudLatLon, cur.bounds);
-          state.cloudAlpha = state.cloudAlpha > 0 ? 1 : 0;
-        }
+        renderKillPills();
+        applyFixFromCur(cur, { forceVisible: state.killedDroneIds.size > 0 });
+        updateRoeFromEntry(cur.entry, cur.meta);
         updateLiveReadout(data);
         updateScenarioCards();
+        if (state.killedDroneIds.size > 0) {
+          _sweepData = [];
+          fetchSweep().then(drawMoneyCurve);
+        }
       } catch (e) {
         addLog(`Recompute failed: ${e.message}`, "warn");
       } finally {
         setSliderLoading(false);
       }
+    }
+
+    // ─── Session 13 — Kill-drone helpers ────────────────────────────────────
+
+    function renderKillPills() {
+      const section = document.getElementById("killSection");
+      const pillsEl = document.getElementById("killPills");
+      const banner  = document.getElementById("insufficientBanner");
+      if (!section || !pillsEl) return;
+      if (!state.frames.length) { section.style.display = "none"; return; }
+      const cur = state.frames[state.scenarioIndex];
+      const drones = cur?.entry?.drones_used ?? [];
+      if (!drones.length) { section.style.display = "none"; return; }
+      section.style.display = "";
+      pillsEl.innerHTML = "";
+      for (const d of drones) {
+        const pill = document.createElement("span");
+        pill.className   = "kill-pill" + (state.killedDroneIds.has(d.drone_id) ? " killed" : "");
+        pill.dataset.did = d.drone_id;
+        pill.textContent = d.drone_id;
+        pill.title       = state.killedDroneIds.has(d.drone_id) ? "Click to restore" : "Click to kill";
+        pill.addEventListener("click", () => toggleKillDrone(d.drone_id));
+        pillsEl.appendChild(pill);
+      }
+      const isInsufficient = cur?.entry?.recommended_action === "INSUFFICIENT_SENSORS";
+      if (banner) banner.classList.toggle("visible", isInsufficient);
+    }
+
+    function toggleKillDrone(droneId) {
+      if (state.killedDroneIds.has(droneId)) {
+        state.killedDroneIds.delete(droneId);
+      } else {
+        state.killedDroneIds.add(droneId);
+      }
+      renderKillPills();
+      const sigT = sliderToSigT(parseInt(document.getElementById("sigTSlider")?.value ?? 65));
+      const sigP = sliderToSigP(parseInt(document.getElementById("sigPSlider")?.value ?? 24));
+      recomputeCurrentScenario(sigT, sigP);
+    }
+
+    function cycleKillDrone() {
+      if (!state.frames.length) return;
+      const cur    = state.frames[state.scenarioIndex];
+      const drones = cur?.entry?.drones_used ?? [];
+      if (!drones.length) return;
+      const allKilled = drones.every(d => state.killedDroneIds.has(d.drone_id));
+      if (allKilled) {
+        state.killedDroneIds = new Set();
+      } else {
+        const next = drones.find(d => !state.killedDroneIds.has(d.drone_id));
+        if (next) state.killedDroneIds.add(next.drone_id);
+      }
+      renderKillPills();
+      const sigT = sliderToSigT(parseInt(document.getElementById("sigTSlider")?.value ?? 65));
+      const sigP = sliderToSigP(parseInt(document.getElementById("sigPSlider")?.value ?? 24));
+      recomputeCurrentScenario(sigT, sigP);
+      addLog(`Kill toggle: ${[...state.killedDroneIds].join(", ") || "all restored"}`, "warn");
+    }
+
+    function resetKills() {
+      state.killedDroneIds = new Set();
+      renderKillPills();
+      const sigT = sliderToSigT(parseInt(document.getElementById("sigTSlider")?.value ?? 65));
+      const sigP = sliderToSigP(parseInt(document.getElementById("sigPSlider")?.value ?? 24));
+      recomputeCurrentScenario(sigT, sigP);
+      addLog("All drones restored", "ok");
+    }
+
+    // Sample a random point inside a convex polygon (MC wedge)
+    function sampleFromPolygon(pts) {
+      if (!pts || pts.length === 0) return null;
+      const cx = pts.reduce((s, p) => s + p.x, 0) / pts.length;
+      const cy = pts.reduce((s, p) => s + p.y, 0) / pts.length;
+      const v  = pts[Math.floor(Math.random() * pts.length)];
+      const t  = 0.25 + Math.random() * 0.55;
+      return { x: cx + (v.x - cx) * t, y: cy + (v.y - cy) * t };
     }
 
     function gdopQuality(gdop) {
@@ -3193,8 +3752,7 @@
       if (!state.frames.length) return;
       const cur = state.frames[state.scenarioIndex];
       const scenarioId = cur.entry.scenario;
-      const base = (location.hostname === "127.0.0.1" || location.hostname === "localhost")
-        ? location.origin : null;
+      const base = apiBase();
       if (!base) return;
       const sp = sliderToSigP(+document.getElementById("sigPSlider").value);
       if (_sweepSigP !== null && Math.abs(_sweepSigP - sp) < 0.5 &&
@@ -3463,6 +4021,7 @@
       initSandboxFromScenario(idx);
       state.sandboxMode = true;
       entityLayer.classList.add("sandbox-mode");
+      entityLayer.style.pointerEvents = "auto";
       document.getElementById("sbBanner").classList.add("visible");
       document.getElementById("btnSandbox").textContent = "EXIT SANDBOX";
       document.getElementById("btnSandbox").classList.add("danger");
@@ -3477,6 +4036,7 @@
       state.sandboxEstimate = null;
       state.sandboxError_m = null;
       entityLayer.classList.remove("sandbox-mode");
+      entityLayer.style.pointerEvents = "";
       document.getElementById("sbBanner").classList.remove("visible");
       document.getElementById("btnSandbox").textContent = "ENTER SANDBOX";
       document.getElementById("btnSandbox").classList.remove("danger");
@@ -3531,6 +4091,7 @@
                    fill="#e8a838" stroke="#c47a10" stroke-width="1.5" opacity="0.92"/>
         </svg>`;
         el.title = "Source — drag to reposition";
+        el.style.pointerEvents = "auto";
         attachSandboxDragHandler(el, "source");
         entityEls.set("sb-source", el);
         entityLayer.appendChild(el);
@@ -3546,24 +4107,28 @@
           <text x="16" y="20" text-anchor="middle" font-size="11" fill="#0a120c" font-weight="bold">D</text>
         </svg>`;
         el.title = `${d.id} — drag to reposition`;
+        el.style.pointerEvents = "auto";
         attachSandboxDragHandler(el, d.id);
         entityEls.set(d.id, el);
         entityLayer.appendChild(el);
       }
     }
 
-    // Attach pointer-capture drag handler to a sandbox entity element
+    // Attach drag handler to a sandbox entity element (document-level listeners
+    // avoid Leaflet swallowing events when pointer leaves the element briefly).
     function attachSandboxDragHandler(el, entityId) {
       el.addEventListener("pointerdown", (ev) => {
         if (!state.sandboxMode) return;
+        ev.preventDefault();
         ev.stopPropagation();
-        el.setPointerCapture(ev.pointerId);
         el.classList.add("dragging");
 
+        const mapRect = document.getElementById("leafletMap").getBoundingClientRect();
+
         function onMove(mv) {
-          const rect  = entityLayer.getBoundingClientRect();
-          const px    = mv.clientX - rect.left;
-          const py    = mv.clientY - rect.top;
+          mv.preventDefault();
+          const px = mv.clientX - mapRect.left;
+          const py = mv.clientY - mapRect.top;
           const latlng = leafletMap.containerPointToLatLng([px, py]);
           const { nx, ny } = latLonToNorm_sb(latlng.lat, latlng.lng);
 
@@ -3576,18 +4141,18 @@
             const d = state.sandboxDrones.find(x => x.id === entityId);
             if (d) { d.lat = latlng.lat; d.lon = latlng.lng; d.nx = nx; d.ny = ny; }
           }
-          scheduleSandboxFetch(250);  // debounced fetch after drag moves
+          scheduleSandboxFetch(200);
         }
 
         function onUp() {
           el.classList.remove("dragging");
-          el.removeEventListener("pointermove", onMove);
-          el.removeEventListener("pointerup",   onUp);
-          scheduleSandboxFetch(0);    // immediate fetch on release
+          document.removeEventListener("pointermove", onMove);
+          document.removeEventListener("pointerup",   onUp);
+          scheduleSandboxFetch(0);
         }
 
-        el.addEventListener("pointermove", onMove);
-        el.addEventListener("pointerup",   onUp);
+        document.addEventListener("pointermove", onMove);
+        document.addEventListener("pointerup",   onUp);
       });
     }
 
@@ -3828,8 +4393,7 @@
     }
 
     // ─── Init ─────────────────────────────────────────────────────────────
-    addLog("Tactical Edge ready — MML Maastokartta + Rinnevarjostus", "ok");
-    addLog("Click a scenario card or press → to begin", "ok");
+    addLog("Triangle ready — MML Maastokartta + Rinnevarjostus", "ok");
 
     window.addEventListener("resize", resize);
     resize();
@@ -3882,7 +4446,14 @@
 
     // Keyboard shortcuts
     document.addEventListener("keydown", (ev) => {
+      if (isGuideOpen() && ev.key === "Tab") {
+        ev.preventDefault();
+        if (ev.shiftKey) tourBack();
+        else tourNext();
+        return;
+      }
       if (ev.target.tagName === "INPUT") return;
+      if (isGuideOpen()) return;
       if (ev.key === "ArrowRight") { ev.preventDefault(); nextPhase(); }
       if (ev.key === "ArrowLeft")  { ev.preventDefault(); prevPhase(); }
       if (ev.key === " ")          { ev.preventDefault();
@@ -3892,14 +4463,22 @@
         updatePhaseUI();
       }
       if (ev.key === "r" || ev.key === "R") { ev.preventDefault(); resetScenario(); }
-      if (ev.key === "Escape" && state.sandboxMode) { ev.preventDefault(); exitSandboxMode(); }
+      if (ev.key === "k" || ev.key === "K") { ev.preventDefault(); cycleKillDrone(); }
+      if (ev.key === "?" || (ev.key === "/" && ev.shiftKey)) {
+        ev.preventDefault();
+        openGuide();
+      }
+      if (ev.key === "Escape") {
+        if (isGuideOpen()) { ev.preventDefault(); closeGuide(false); }
+        else if (state.sandboxMode) { ev.preventDefault(); exitSandboxMode(); }
+      }
     });
 
     loadLocalizations();
 
-    // ?ws=ws://192.168.1.10:8765 auto-connect
+    // ?ws=ws://192.168.1.10:8765 auto-connect (dev hosts only)
     const params = new URLSearchParams(location.search);
-    if (params.get("ws")) {
+    if (params.get("ws") && params.get("dev") === "1") {
       document.getElementById("wsUrl").value = params.get("ws");
       connectWs();
     }

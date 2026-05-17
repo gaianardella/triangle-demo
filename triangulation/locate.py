@@ -38,7 +38,8 @@ from .core import (C, ellipse_axes, ellipse_xy, localize, mc_confidence,
 from .jam import apply_jamming
 from .policy import (decide as _policy_decide, priority as _policy_priority,
                       search_points as _search_points,
-                      bearing_decide as _bearing_decide)
+                      bearing_decide as _bearing_decide,
+                      insufficient_sensors_decide as _insufficient_sensors_decide)
 from .projection import (latlon_to_local, latlon_to_local_array,
                          local_to_latlon, local_to_latlon_array)
 
@@ -149,17 +150,69 @@ def _cloud_as(cloud_xy: np.ndarray, ellipse_polygon_xy: np.ndarray,
     raise ValueError(f"unknown cloud format: {fmt}")
 
 
+def _localize_no_fix(group: list[dict], *, scenario_variant: str | None = None) -> dict:
+    """Return an INSUFFICIENT_SENSORS result when <2 drones are alive."""
+    label = group[0].get("label") if group else None
+    decision = _insufficient_sensors_decide(label)
+    return {
+        "fix_kind": "none",
+        "source": None,
+        "cep50_m": None,
+        "cep95_m_approx": None,
+        "zone_area_m2": None,
+        "gdop": None,
+        "recommended_action": decision.action,
+        "recommended_action_reason": decision.reason,
+        "recommended_action_severity": decision.severity,
+        "weapons_release_required": decision.weapons_release_required,
+        "localization_confidence": 0.0,
+        "cloud_latlon": [],
+        "cloud_xy_local": [],
+        "hyperbola_latlon": [],
+        "hyperbola_xy_local": [],
+        "wedge_latlon": [],
+        "wedge_xy_local": [],
+        "drones_used": [],
+        "scenario": scenario_variant or "",
+        "input_errors": {},
+    }
+
+
 def localize_scenario(group: list[dict], *,
                        mc_samples: int = 400,
                        confidence: float = 0.95,
                        cloud_format: str = "ellipse",
                        jammed_drone_ids: set[str] | None = None,
+                       killed_drone_ids: set[str] | None = None,
                        scenario_variant: str | None = None,
                        sigma_t_override_ms: float | None = None,
                        sigma_pos_override_m: float | None = None,
                        rng: np.random.Generator | None = None) -> dict:
     """Run the full pipeline on one scenario group; return an output dict."""
     rng = rng if rng is not None else np.random.default_rng(7)
+
+    # Session 13: filter out killed drones before any math
+    if killed_drone_ids:
+        group = [e for e in group if e.get("drone_id") not in killed_drone_ids]
+
+    # Route by number of alive relevant drones
+    alive_ids = {e["drone_id"] for e in group if e.get("relevant")}
+    n_alive = len(alive_ids)
+    if n_alive < 2:
+        return _localize_no_fix(group, scenario_variant=scenario_variant)
+    if n_alive == 2:
+        ok, _ = _bearing_localizable(group)
+        if ok:
+            return localize_2drone_scenario(
+                group,
+                mc_samples=mc_samples,
+                confidence=confidence,
+                scenario_variant=scenario_variant,
+                sigma_t_override_ms=sigma_t_override_ms,
+                sigma_pos_override_m=sigma_pos_override_m,
+                rng=rng,
+            )
+
 
     # 1. choose a local projection origin: centroid of the drone positions
     lats = np.array([e["position"]["lat"] for e in group])
