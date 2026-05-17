@@ -600,7 +600,7 @@ def main(argv: list[str] | None = None) -> None:
     # Pre-load events so first request is fast
     events, groups = _load_events()
     n_ok = sum(1 for _, g in groups.items() if _localizable(g)[0])
-    print(f"Tactical Edge server")
+    print(f"Triangle server")
     print(f"  Events loaded: {len(events)}  Localizable scenarios: {n_ok}")
     print(f"  UI:   http://{args.host}:{args.port}/")
     print(f"  API:  http://{args.host}:{args.port}/api/scenarios")
