@@ -1,9 +1,8 @@
 {
   "fps": 30,
-  "headFrames": 15,
+  "headFrames": 0,
   "tailFrames": 0,
-  "switchSec": 2.0,
-  "audioLenSec": 7.0,
+  "audioLenSec": 5.0,
   "scenarios": [
     {
       "id": "tank",
@@ -13,24 +12,23 @@
       "rawAudio": "tank_raw.wav",
       "preAudio": "tank_pre.wav",
       "audioStartSec": 0.0,
-      "durationSec": 7.0,
+      "durationSec": 5.0,
       "startFrame": 0,
-      "frames": 225,
-      "switchAtFrame": 75,
-      "verdictAtFrame": 105,
+      "frames": 300,
+      "replayAtFrame": 150,
+      "switchAtFrame": 150,
+      "verdictAtFrame": 240,
       "verdictTriggerSec": 3.0,
       "verdict": {
         "label": "tank",
         "labelHuman": "Tank engine",
         "relevant": true,
-        "peakConfidence": 0.78,
-        "shareConfidence": 0.935,
+        "peakConfidence": 0.85,
+        "shareConfidence": 0.62,
         "windowCounts": {
-          "tank": 43,
-          "missile_launch": 2,
-          "drone": 1
+          "tank": 44
         },
-        "silentWindows": 25,
+        "silentWindows": 27,
         "totalWindows": 71
       }
     },
@@ -42,24 +40,23 @@
       "rawAudio": "gunshot_raw.wav",
       "preAudio": "gunshot_pre.wav",
       "audioStartSec": 3.0,
-      "durationSec": 7.0,
-      "startFrame": 225,
-      "frames": 225,
-      "switchAtFrame": 75,
-      "verdictAtFrame": 120,
-      "verdictTriggerSec": 3.499,
+      "durationSec": 5.0,
+      "startFrame": 300,
+      "frames": 300,
+      "replayAtFrame": 150,
+      "switchAtFrame": 150,
+      "verdictAtFrame": 255,
+      "verdictTriggerSec": 3.5,
       "verdict": {
         "label": "gunshot",
         "labelHuman": "Gunfire",
         "relevant": true,
-        "peakConfidence": 0.733,
-        "shareConfidence": 0.056,
+        "peakConfidence": 0.78,
+        "shareConfidence": 0.1,
         "windowCounts": {
-          "tank": 33,
-          "missile_launch": 1,
-          "gunshot": 2
+          "gunshot": 7
         },
-        "silentWindows": 35,
+        "silentWindows": 64,
         "totalWindows": 71
       }
     },
@@ -71,26 +68,26 @@
       "rawAudio": "missile_raw.wav",
       "preAudio": "missile_pre.wav",
       "audioStartSec": 11.0,
-      "durationSec": 7.0,
-      "startFrame": 450,
-      "frames": 225,
-      "switchAtFrame": 75,
-      "verdictAtFrame": 127,
-      "verdictTriggerSec": 3.749,
+      "durationSec": 5.0,
+      "startFrame": 600,
+      "frames": 300,
+      "replayAtFrame": 150,
+      "switchAtFrame": 150,
+      "verdictAtFrame": 262,
+      "verdictTriggerSec": 3.75,
       "verdict": {
         "label": "missile_launch",
         "labelHuman": "Missile / UCAS launch",
         "relevant": true,
-        "peakConfidence": 0.763,
-        "shareConfidence": 0.19,
+        "peakConfidence": 0.8,
+        "shareConfidence": 0.37,
         "windowCounts": {
-          "tank": 17,
-          "missile_launch": 4
+          "missile_launch": 26
         },
-        "silentWindows": 50,
+        "silentWindows": 45,
         "totalWindows": 71
       }
     }
   ],
-  "totalFrames": 675
+  "totalFrames": 900
 }

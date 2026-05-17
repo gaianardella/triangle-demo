@@ -54,6 +54,7 @@ type Scenario = {
   durationSec: number;
   startFrame: number;
   frames: number;
+  replayAtFrame: number;
   switchAtFrame: number;
   verdictAtFrame: number;
   verdictTriggerSec: number;
@@ -61,8 +62,8 @@ type Scenario = {
 };
 
 const ASSET_PREFIX = "spectrograms/";
-const SWITCH_FRAMES = Math.round((manifest.switchSec ?? 2) * manifest.fps);
 const AUDIO_LEN_SEC = manifest.audioLenSec ?? 7;
+const AUDIO_FRAMES = Math.round(AUDIO_LEN_SEC * manifest.fps);
 
 const clamp = (v: number, lo: number, hi: number): number =>
   v < lo ? lo : v > hi ? hi : v;
@@ -94,7 +95,7 @@ const Header: React.FC<{
   totalScenarios: number;
   localFrame: number;
 }> = ({ scenarioIndex, totalScenarios, localFrame }) => {
-  const opacity = clamp(localFrame / HEAD_FRAMES, 0, 1);
+  const opacity = HEAD_FRAMES > 0 ? clamp(localFrame / HEAD_FRAMES, 0, 1) : 1;
   return (
     <div
       style={{
@@ -159,7 +160,10 @@ const Header: React.FC<{
   );
 };
 
-const TIME_TICKS_SEC = [0, 1, 2, 3, 4, 5, 6, 7];
+const TIME_TICKS_SEC = Array.from(
+  { length: Math.round(AUDIO_LEN_SEC) + 1 },
+  (_, i) => i,
+);
 
 const SpectrogramPanel: React.FC<{
   label: string;
@@ -423,6 +427,32 @@ const VerdictBlock: React.FC<{
   );
 };
 
+const PhaseIndicator: React.FC<{ inPassA: boolean; inPassB: boolean }> = ({
+  inPassA,
+  inPassB,
+}) => {
+  if (!inPassA && !inPassB) return null;
+  const label = inPassA ? "PASS 1/2, RAW MIC INPUT" : "PASS 2/2, DENOISED REPLAY";
+  const color = inPassA ? HUD_DIM : HUD_COLOR;
+  return (
+    <div
+      style={{
+        position: "absolute",
+        top: 100,
+        left: 0,
+        right: 0,
+        textAlign: "center",
+        fontFamily: MONO_FONT,
+        fontSize: 14,
+        letterSpacing: 4,
+        color,
+      }}
+    >
+      {label}
+    </div>
+  );
+};
+
 const FrameCounter: React.FC<{ frame: number }> = ({ frame }) => {
   const { fps } = useVideoConfig();
   const t = (frame / fps).toFixed(2);
@@ -450,51 +480,47 @@ const ScenarioBlock: React.FC<{
   totalScenarios: number;
 }> = ({ scenario, scenarioIndex, totalScenarios }) => {
   const localFrame = useCurrentFrame();
-  const audioFrames = scenario.frames - HEAD_FRAMES - TAIL_FRAMES;
-  const playFrame = clamp(localFrame - HEAD_FRAMES, 0, audioFrames);
-  const progress = audioFrames > 0 ? playFrame / audioFrames : 0;
+  const replayAt = scenario.replayAtFrame ?? scenario.switchAtFrame;
+  const inPassA = localFrame >= HEAD_FRAMES && localFrame < replayAt;
+  const inPassB = localFrame >= replayAt;
+
+  // Independent playhead per panel. Raw freezes at 100% during pass B; denoised stays at 0 until pass B.
+  const rawProgress = clamp((localFrame - HEAD_FRAMES) / AUDIO_FRAMES, 0, 1);
+  const preProgress = clamp((localFrame - replayAt) / AUDIO_FRAMES, 0, 1);
   const showPlayhead = localFrame >= HEAD_FRAMES;
   const reveal = localFrame - scenario.verdictAtFrame;
 
-  const switchAt = scenario.switchAtFrame;
-  const rawDurationFrames = switchAt - HEAD_FRAMES;
-  const preDurationFrames = scenario.frames - switchAt - TAIL_FRAMES;
-  const rawActive = localFrame >= HEAD_FRAMES && localFrame < switchAt;
-  const preActive = localFrame >= switchAt;
-
   return (
     <AbsoluteFill>
-      <Sequence from={HEAD_FRAMES} durationInFrames={rawDurationFrames}>
+      <Sequence from={HEAD_FRAMES} durationInFrames={AUDIO_FRAMES}>
         <Audio src={staticFile(`${ASSET_PREFIX}${scenario.rawAudio}`)} />
       </Sequence>
-      <Sequence from={switchAt} durationInFrames={preDurationFrames}>
-        <Audio
-          src={staticFile(`${ASSET_PREFIX}${scenario.preAudio}`)}
-          startFrom={SWITCH_FRAMES}
-        />
+      <Sequence from={replayAt} durationInFrames={AUDIO_FRAMES}>
+        <Audio src={staticFile(`${ASSET_PREFIX}${scenario.preAudio}`)} />
       </Sequence>
       <Header
         scenarioIndex={scenarioIndex}
         totalScenarios={totalScenarios}
         localFrame={localFrame}
       />
+      <PhaseIndicator inPassA={inPassA} inPassB={inPassB} />
       <SpectrogramPanel
         label="DRONE MICROPHONE INPUT"
         sub=""
         png={scenario.rawPng}
         x={LEFT_X}
-        progress={progress}
-        showPlayhead={showPlayhead}
-        active={rawActive}
+        progress={rawProgress}
+        showPlayhead={showPlayhead && inPassA}
+        active={inPassA}
       />
       <SpectrogramPanel
-        label="AFTER UAV DENOISE"
-        sub="notch, spectral sub, REPET"
+        label="AFTER ML DENOISE"
+        sub="replay"
         png={scenario.prePng}
         x={RIGHT_X}
-        progress={progress}
-        showPlayhead={showPlayhead}
-        active={preActive}
+        progress={preProgress}
+        showPlayhead={inPassB}
+        active={inPassB}
       />
       {reveal >= 0 && <VerdictBlock scenario={scenario} reveal={reveal} />}
     </AbsoluteFill>
