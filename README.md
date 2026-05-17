@@ -56,7 +56,25 @@ See [Audio pipeline](#audio-pipeline) for the full detect → locate flow.
 
 ## UI operator guide
 
-Triangle’s console is a single-page map (Finnish forest sector). On load it enters **LOCALIZE** mode, loads five scenarios, turns **AUTO** on, and **starts scenario 1** automatically. You can switch scenarios or take manual control at any time.
+Triangle’s console is a single-page map (Finnish forest sector). On load it enters **LOCALIZE** mode and loads five precomputed scenarios.
+
+### Interactive tutorial (judges)
+
+A **step-by-step spotlight tour** opens **automatically** when the map loads (before the demo runs).
+
+| Control | Action |
+|---------|--------|
+| **Next** / **Tab** | Next tour step |
+| **Back** / **Shift+Tab** | Previous step |
+| **Exit** (last step) | End tour and **explore the interactive demo** (scenario 1 starts with AUTO on) |
+| **Skip tutorial** | Same as Exit — top-right and bottom-left on every step |
+| **GUIDE** (header) | Reopen the tour anytime |
+| **?** | Reopen the tour |
+
+- Add `?notour=1` to the URL to skip the auto-tour and go straight to the demo.
+- Add `?guide=1` to force the tour on reload.
+
+The tour walks through: scenario cards → phase stepper → playback controls → map → mesh strip → σ sliders → sandbox → **GUIDE** button.
 
 ### Layout overview
 
@@ -117,6 +135,10 @@ At **COMPLETE**, AUTO turns off and the scenario stays frozen until you press **
 
 ### Keyboard shortcuts
 
+**During the tutorial:** **Tab** / **Shift+Tab** step through the tour; other map shortcuts are disabled.
+
+**During the demo:**
+
 | Key | Action |
 |-----|--------|
 | **→** | Next phase (same as **NEXT**) |
@@ -124,7 +146,8 @@ At **COMPLETE**, AUTO turns off and the scenario stays frozen until you press **
 | **Space** | Toggle **AUTO** |
 | **R** | **RESET** current scenario |
 | **K** | Cycle “kill” state on listening drones (see Drone status) |
-| **Esc** | Exit **Sandbox** mode |
+| **?** | Open the tutorial |
+| **Esc** | Close tutorial, or exit **Sandbox** |
 
 Shortcuts are ignored while focus is in a text input.
 
