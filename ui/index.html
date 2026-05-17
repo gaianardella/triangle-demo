@@ -1431,7 +1431,7 @@
       <div class="phase-controls" id="phaseControls">
         <button class="phase-btn" id="btnPrev"      title="Previous phase [←]">⏪ PREV</button>
         <button class="phase-btn" id="btnNextPhase" title="Next phase [→]">▶ NEXT</button>
-        <button class="phase-btn" id="btnAuto"      title="Toggle auto-advance [Space]">⏵ AUTO</button>
+        <button class="phase-btn auto-active" id="btnAuto" title="Toggle auto-advance [Space]">⏵ AUTO</button>
         <button class="phase-btn" id="btnReset"     title="Reset scenario [R]">⟲ RESET</button>
         <div class="phase-info" id="phaseInfo">PATROL · standby · 1/5</div>
       </div>
@@ -1771,7 +1771,7 @@
       step: 0,            // 0 = PATROL … 5 = COMPLETE
       stepT: 0,           // ms elapsed in current step animation
       stepProgress: 0,    // 0..1 within current step
-      autoplay: false,
+      autoplay: true,
       paused: false,
       completed: false,   // true once "complete" phase fires — freezes tickStep
       missionMs: 0,
@@ -2496,8 +2496,8 @@
       renderKillPills();
       state.completed       = false;
       state.cloudFromSlider = false;
-      state.autoplay        = false;   // manual reset returns to manual mode
-      document.getElementById("btnAuto").classList.remove("auto-active");
+      state.autoplay        = true;
+      document.getElementById("btnAuto").classList.add("auto-active");
       state.step            = 0;
       state.stepT           = 0;
       state.stepProgress    = 0;
@@ -3083,7 +3083,7 @@
       state.step          = 0;
       state.stepT         = 0;
       state.stepProgress  = 0;
-      state.autoplay      = false;
+      state.autoplay      = true;
       state.paused        = false;
       state.missionMs     = 0;
       state.stepState     = {};
@@ -3092,11 +3092,13 @@
       state.cloud         = [];
       state.geoBounds     = state.frames[0].bounds;
       syncMapView(state.frames[0].bounds);
-      showScenarioIntro(state.frames[0], 0, n);
       buildScenarioCards();
       updatePhaseUI();
       syncSlidersToScenario();
-      addLog(`Mission ready · ${n} scenarios · click a card or press → to begin`, "ok");
+      const btnAuto = document.getElementById("btnAuto");
+      if (btnAuto) btnAuto.classList.add("auto-active");
+      addLog(`Mission ready · ${n} scenarios · AUTO on`, "ok");
+      setScenario(0);
     }
 
     // ─── Session 8 — σ sliders + live recompute ──────────────────────────
@@ -3988,7 +3990,6 @@
 
     // ─── Init ─────────────────────────────────────────────────────────────
     addLog("Triangle ready — MML Maastokartta + Rinnevarjostus", "ok");
-    addLog("Click a scenario card or press → to begin", "ok");
 
     window.addEventListener("resize", resize);
     resize();
