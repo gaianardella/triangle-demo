@@ -9,6 +9,8 @@ GPS-denied acoustic TDOA triangulation for UAV swarms, with ROE decision support
 
 ## Quick start
 
+Full UI (σ sliders, mesh panel, sandbox) — **use this**:
+
 ```bash
 pip install -r requirements.txt
 python -m triangulation.server
@@ -16,7 +18,39 @@ python -m triangulation.server
 
 Open **http://localhost:5050/** in your browser.
 
-The server loads precomputed localizations and serves the UI + API. For regenerating `detection/output/localizations.json`, see [Audio pipeline](#audio-pipeline) below.
+The server loads precomputed localizations and serves the UI + API. Hard refresh after code changes: **Cmd+Shift+R** (Mac) or **Ctrl+Shift+R** (Windows/Linux).
+
+### Public demo (Render)
+
+Stays online when your laptop is off:
+
+1. Push `main` to GitHub: https://github.com/gaianardella/triangle-demo  
+2. [Render Dashboard](https://dashboard.render.com/) → connect the repo (or use `render.yaml` Blueprint)  
+3. Share the service URL, e.g. **https://triangle-demo.onrender.com/**
+
+### Legacy static UI (no API)
+
+σ sliders, sandbox, and live recompute **will not work** — map only:
+
+```bash
+python3 -m http.server 8080
+# Open http://localhost:8080/ui/index.html
+```
+
+Prefer `python -m triangulation.server` on port **5050**.
+
+### Regenerate localizations
+
+Only needed after changing detection or triangulation logic:
+
+```bash
+python -m triangulation.locate \
+  --in detection/output/events.json \
+  --out detection/output/localizations.json \
+  --pretty
+```
+
+See [Audio pipeline](#audio-pipeline) for the full detect → locate flow.
 
 ---
 
@@ -193,6 +227,7 @@ triangle-demo/
 ├── detection/                 # Audio classify + scenarios
 ├── mesh/                      # Compact binary mesh frames
 ├── detection/output/localizations.json
+├── pitch/                     # Promo video, slides, sample WAV (not used at runtime)
 ├── render.yaml                # Render.com deploy
 └── SUBMISSION.md              # Hackathon description
 ```
