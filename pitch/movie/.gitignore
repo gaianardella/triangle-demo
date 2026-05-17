@@ -1,6 +1,0 @@
-node_modules
-out
-.cache
-.DS_Store
-public/*.mp4
-scene-descriptions

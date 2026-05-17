@@ -19,3 +19,7 @@ data/samples/negative/
 # Nested dataset repos
 data/ESC-50/.git/
 docs/
+
+# Pitch / promo video (not needed on Render — large clone)
+movie/
+pitch/movie/
