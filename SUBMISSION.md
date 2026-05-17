@@ -2,7 +2,7 @@
 
 ## The problem
 
-In GPS-denied or contested environments, forces still need to **know where a threat is** and **what to do next**, without flooding a fragile mesh with heavy JSON telemetry. Gunfire, launches, and vehicle noise arrive at different UAVs at slightly different times; turning those milliseconds into metres and rules-of-engagement (ROE) decisions is hard—and doing it **fast and small on the wire** is harder.
+In GPS-denied or contested environments, forces still need to **know where a threat is** and **what to do next**, without flooding a fragile mesh with heavy JSON telemetry. Gunfire, launches, and vehicle noise arrive at different UAVs at slightly different times; turning those milliseconds into metres and rules-of-engagement (ROE) decisions is hard, and doing it **fast and small on the wire** is harder.
 
 ### Why listen instead of only look?
 
@@ -10,7 +10,7 @@ A drone camera sees a narrow cone, blocked by trees, smoke, and night, only at s
 
 ## The solution
 
-**Triangle** is an integrated acoustic intelligence platform for UAV swarms. It ingests multi-drone acoustic detections, fuses them with **time-difference-of-arrival (TDOA) triangulation** and **Monte Carlo uncertainty**, recommends **ROE-aligned actions**, and distributes situational awareness over a **compact binary mesh protocol**, all through a single **operator live map** built for GPS-denied forest and border sectors.
+**Triangle** is an integrated acoustic intelligence platform for UAV swarms. It ingests multi-drone acoustic detections, fuses them with **time-difference-of-arrival (TDOA) triangulation** and **Monte Carlo uncertainty**, recommends **ROE-aligned actions**, and distributes situational awareness over a **compact binary mesh protocol**, all through a single **operator live map** for GPS-denied sectors.
 
 ## How Triangle works
 
@@ -34,7 +34,7 @@ Per-threat **multi-UAV WAV mixes** are classified into events, fused into geodet
 
 ### Localization engine
 
-Triangle groups detections by contact and computes a threat fix with **three or more drones**, or a **two-drone bearing solution** when geometry allows. Every fix includes geodetic coordinates, **CEP50**, **GDOP**, localization confidence, and a **95% uncertainty ellipse** from propagated timing and position error—not a single optimistic point. The system degrades gracefully when assets are lost (insufficient sensors, bearing-only locus).
+Triangle groups detections by contact and computes a threat fix with **three or more drones**, or a **two-drone bearing solution** when geometry allows. Every fix includes geodetic coordinates, **CEP50**, **GDOP**, localization confidence, and a **95% uncertainty ellipse** from timing and position error—not a single optimistic point. Degrades gracefully when drones are lost (bearing-only fixes).
 
 ### ROE decision support
 
@@ -48,9 +48,11 @@ Triangle replaces bulky JSON with wire-efficient frames: **~32-byte tactical eve
 
 The **Triangle Live Map** (Finnish sector basemap) gives commanders a continuous mission picture across five profiles: missile/UCAS launch (RECON), armoured vehicle (tight ellipse), gunfire (engagement threshold), wildlife false positive (no engagement), and degraded geometry (HOLD).
 
+**Guided tour:** auto-start spotlight on each control (Tab/Next, **Exit** to explore); five interactive scenarios with AUTO playback.
+
 **Mission cycle:** PATROL → DETECT → LOCALIZE → DECIDE → RESPOND → COMPLETE—with live drone tracks, confidence clouds, ROE advisories, recon imagery, and strike handoff when authorized.
 
-**Response chain:** after acoustic localization, a **recon UAV flies to the threat fix** (inside the red confidence cloud), captures a **still image**, and pushes it to the operator recon feed—visual confirmation before strike. Authorized STRIKE vectors a killer asset to the same fix; sound finds, photo confirms, policy engages—no raw video on the mesh.
+**Response chain:** a **recon UAV** enters the confidence cloud, captures a **still image** for the operator feed, then authorized **STRIKE** vectors a killer asset—sound finds, photo confirms, policy engages—no video on the mesh.
 
 **Capabilities:** σ sliders (CEP50, cloud, ROE); mesh bandwidth dashboard; planning sandbox; resilient swarm with asset loss and bearing-only fixes.
 

@@ -2448,6 +2448,26 @@
       el.textContent = "";
     }
 
+    function updateRoeFromEntry(e, meta) {
+      const pid = PHASES[state.step]?.id;
+      if (!["decide", "respond", "complete"].includes(pid)) return;
+      const fa  = meta?.falseAlarm;
+      const act = e.recommended_action || "HOLD";
+      if (fa) {
+        showRoeBanner("⚠ FALSE ALARM — NO ACTION TAKEN", "roe-false");
+      } else if (act === "STRIKE") {
+        showRoeBanner(`⚔ STRIKE AUTHORIZED · ${e.label_human || e.label}`, "roe-hold");
+      } else if (act === "RECON") {
+        showRoeBanner(`▶ RECON ORDERED · ${e.label_human || e.label}`, "roe-recon");
+      } else if (act === "SEARCH") {
+        showRoeBanner(`⊹ SEARCH ORDERED · CEP50 ${e.cep50_m}m — SWEEPING SECTOR`, "roe-recon");
+      } else if (act === "INSUFFICIENT_SENSORS") {
+        showRoeBanner("⊘ INSUFFICIENT SENSORS · restore drones to resume fix", "roe-hold");
+      } else {
+        showRoeBanner(`✕ HOLD FIRE · CEP50 ${e.cep50_m}m — GEOMETRY INSUFFICIENT`, "roe-hold");
+      }
+    }
+
     // ─── Camera feed helpers ──────────────────────────────────────────────
     const RECON_FEED_DEFAULT = "assets/recon-feed.jpg";
     const RECON_FEED_BY_SCENARIO = {
@@ -3491,6 +3511,45 @@
     // Debounce timer
     let _sigDebounce = null;
 
+    function apiBase() {
+      if (location.protocol === "file:") return null;
+      return location.origin;
+    }
+
+    function applyFixFromCur(cur, { forceVisible = false } = {}) {
+      if (!cur) return;
+      cur.fixKind         = cur.entry.fix_kind         ?? cur.fixKind         ?? "point";
+      cur.cloudLatLon     = cur.entry.cloud_latlon     ?? cur.cloudLatLon     ?? [];
+      cur.hyperbolaLatLon = cur.entry.hyperbola_latlon ?? cur.hyperbolaLatLon ?? [];
+      cur.wedgeLatLon     = cur.entry.wedge_latlon     ?? cur.wedgeLatLon     ?? [];
+
+      state.fixKind = cur.fixKind;
+      const pid     = PHASES[state.step]?.id;
+      const visible = forceVisible || ["localize", "decide", "respond", "complete"].includes(pid);
+      const alpha   = visible ? 1 : Math.max(state.cloudAlpha, 0.85);
+
+      if (state.fixKind === "bearing") {
+        state.hyperbola  = projectCloud(cur.hyperbolaLatLon, cur.bounds);
+        state.wedge      = projectCloud(cur.wedgeLatLon, cur.bounds);
+        state.wedgeAlpha = alpha;
+        state.cloud      = [];
+        state.cloudAlpha = 0;
+      } else if (state.fixKind === "none") {
+        state.hyperbola  = [];
+        state.wedge      = [];
+        state.wedgeAlpha = 0;
+        state.cloud      = [];
+        state.cloudAlpha = 0;
+      } else {
+        state.hyperbola  = [];
+        state.wedge      = [];
+        state.wedgeAlpha = 0;
+        state.cloud      = projectCloud(cur.cloudLatLon, cur.bounds);
+        state.cloudAlpha = cur.cloudLatLon.length ? alpha : 0;
+      }
+      state.cloudFromSlider = state.killedDroneIds.size > 0;
+    }
+
     // ── Live frontend cloud scaling (no backend needed) ──────────────────
     // Scales the pre-loaded cloud around the source position by the ratio
     // of the new sigma_pos to the scenario's base sigma_pos.
@@ -3519,7 +3578,7 @@
       document.getElementById("sigPSlider").dataset.sigmaPosM = sp;
       // Immediate live update — no backend, no debounce
       applySliderCloud(sp);
-      // Backend recompute for CEP / recommended-action numbers (localhost only)
+      // Backend recompute for CEP / recommended-action numbers
       setSliderLoading(true);
       clearTimeout(_sigDebounce);
       _sigDebounce = setTimeout(() => recomputeCurrentScenario(st, sp), 120);
@@ -3536,9 +3595,7 @@
       if (!state.frames.length) return;
       const cur = state.frames[state.scenarioIndex];
       const scenarioId = cur.entry.scenario;
-      const base = (location.hostname === "127.0.0.1" || location.hostname === "localhost")
-        ? `${location.origin}`
-        : null;
+      const base = apiBase();
       if (!base) { setSliderLoading(false); return; }
 
       try {
@@ -3565,30 +3622,15 @@
           hyperbola_latlon:   data.hyperbola_latlon ?? cur.entry.hyperbola_latlon,
           wedge_latlon:       data.wedge_latlon      ?? cur.entry.wedge_latlon,
         };
-        cur.fixKind         = data.fix_kind         || cur.fixKind;
-        cur.hyperbolaLatLon = data.hyperbola_latlon || cur.hyperbolaLatLon || [];
-        cur.wedgeLatLon     = data.wedge_latlon     || cur.wedgeLatLon     || [];
-        cur.cloudLatLon     = data.cloud_latlon     || [];
         renderKillPills();
-        const pid = PHASES[state.step].id;
-        if (["localize","decide","respond","complete"].includes(pid)) {
-          state.fixKind = cur.fixKind;
-          if (cur.fixKind === "bearing") {
-            state.hyperbola  = projectCloud(cur.hyperbolaLatLon, cur.bounds);
-            state.wedge      = projectCloud(cur.wedgeLatLon, cur.bounds);
-            state.wedgeAlpha = 1;
-            state.cloud      = []; state.cloudAlpha = 0;
-          } else if (cur.fixKind === "none") {
-            state.hyperbola = []; state.wedge = []; state.wedgeAlpha = 0;
-            state.cloud = []; state.cloudAlpha = 0;
-          } else {
-            state.hyperbola = []; state.wedge = []; state.wedgeAlpha = 0;
-            state.cloud      = projectCloud(cur.cloudLatLon, cur.bounds);
-            state.cloudAlpha = state.cloudAlpha > 0 ? 1 : 0;
-          }
-        }
+        applyFixFromCur(cur, { forceVisible: state.killedDroneIds.size > 0 });
+        updateRoeFromEntry(cur.entry, cur.meta);
         updateLiveReadout(data);
         updateScenarioCards();
+        if (state.killedDroneIds.size > 0) {
+          _sweepData = [];
+          fetchSweep().then(drawMoneyCurve);
+        }
       } catch (e) {
         addLog(`Recompute failed: ${e.message}`, "warn");
       } finally {
@@ -3710,8 +3752,7 @@
       if (!state.frames.length) return;
       const cur = state.frames[state.scenarioIndex];
       const scenarioId = cur.entry.scenario;
-      const base = (location.hostname === "127.0.0.1" || location.hostname === "localhost")
-        ? location.origin : null;
+      const base = apiBase();
       if (!base) return;
       const sp = sliderToSigP(+document.getElementById("sigPSlider").value);
       if (_sweepSigP !== null && Math.abs(_sweepSigP - sp) < 0.5 &&
